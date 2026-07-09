@@ -152,8 +152,6 @@
     $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.screen === name));
     $("#screen-" + name).classList.add("active");
     $("#page-title").textContent = TITLES[name] || "";
-    // FAB лише на екрані таймера
-    $(".fab").classList.toggle("hidden", name !== "timer");
     if (name === "stats") loadStats();
     if (name === "music") Music.load();
     if (name === "profile") loadProfile();
@@ -204,7 +202,8 @@
   const ICON_PAUSE = '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
 
   function setFabIcon(playing) {
-    $("#fab-icon").innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
+    // FAB прибрано — стан відображає phase-label та прогрес кільця
+    // функція залишається як no-op, щоб не ламати виклики
   }
 
   function toggleTimer() {
@@ -217,7 +216,7 @@
     state.startedAt = new Date().toISOString();
     state.tickerId = setInterval(tick, 1000);
     setFabIcon(true);
-    $("#phase-label").textContent = "У фокусі…";
+    $("#phase-label").textContent = "У фокусі · тап для паузи";
     haptic("light");
     // запускаємо музику, якщо обраний трек
     if (state.selectedTrack) {
@@ -230,7 +229,7 @@
     clearInterval(state.tickerId);
     state.tickerId = null;
     setFabIcon(false);
-    $("#phase-label").textContent = "На паузі";
+    $("#phase-label").textContent = "Пауза · тап для продовження";
     // ставимо музику на паузу
     Music.pauseAudio();
   }
@@ -787,11 +786,14 @@
 
       function setX(x) {
         currentX = x;
-        el.style.transform = "translateX(" + x + "px)";
+        // зсуваємо лише inner, щоб червоний .track-delete-bg залишався на місці
+        const inner = el.querySelector(".track-item-inner");
+        if (inner) inner.style.transform = "translateX(" + x + "px)";
       }
       function closeSwipe() {
         opened = false;
-        el.style.transform = "";
+        const inner = el.querySelector(".track-item-inner");
+        if (inner) inner.style.transform = "";
       }
 
       el.addEventListener("touchstart", (e) => {
@@ -1103,9 +1105,11 @@
       state.isPlaying = false;
       state.playerPlaying = false;
       this._refreshPlayStates();
+      // скидаємо стан Media Session
+      this._setPlaybackState("none");
     },
 
-    // ---------- Media Session API: музика у фоні ----------
+    // ---------- Media Session API: музика у фоні + Dynamic Island ----------
     _setupMediaSession(t) {
       if (!("mediaSession" in navigator)) return;
       const title = t.title || "Без назви";
@@ -1116,25 +1120,44 @@
           artist: artist,
           album: "Focus OS",
           artwork: [
+            { src: "/static/icon-96.png", sizes: "96x96", type: "image/png" },
             { src: "/static/icon-192.png", sizes: "192x192", type: "image/png" },
+            { src: "/static/icon-256.png", sizes: "256x256", type: "image/png" },
+            { src: "/static/icon-512.png", sizes: "512x512", type: "image/png" },
           ],
         });
         navigator.mediaSession.setActionHandler("play", () => this.resume());
         navigator.mediaSession.setActionHandler("pause", () => this.pause());
         navigator.mediaSession.setActionHandler("stop", () => this.stopAudio(true));
+        if ("seekforward" in navigator.mediaSession) {
+          navigator.mediaSession.setActionHandler("seekbackward", null);
+          navigator.mediaSession.setActionHandler("seekforward", null);
+        }
       } catch (e) {}
-      this._updateMediaPlaybackState("playing");
+      this._setPlaybackState("playing");
+    },
+
+    // КРИТИЧНО для Dynamic Island/Lock Screen: playbackState показує,
+    // що медіа активне → iOS показує Now Playing віджет
+    _setPlaybackState(state) {
+      if (!("mediaSession" in navigator)) return;
+      try {
+        navigator.mediaSession.playbackState = state; // "playing" | "paused" | "none"
+      } catch (e) {}
+      // позиція для скрабінгу (live stream = 0/0)
+      if ("setPositionState" in navigator.mediaSession) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: Number.MAX_SAFE_INTEGER,
+            playbackRate: 1,
+            position: 0,
+          });
+        } catch (e) {}
+      }
     },
 
     _updateMediaPlaybackState(stateStr) {
-      if (!("mediaSession" in navigator) || !("setPositionState" in navigator.mediaSession)) return;
-      try {
-        navigator.mediaSession.setPositionState({
-          duration: 0, // потік невідомої довжини
-          playbackRate: 1,
-          position: 0,
-        });
-      } catch (e) {}
+      this._setPlaybackState(stateStr);
     },
   };
 
@@ -1278,23 +1301,18 @@
   // ---------- Події ----------
   function bindEvents() {
     $$(".mode-btn").forEach((b) => b.addEventListener("click", () => selectMode(b.dataset.mode)));
-    $("#start-btn").addEventListener("click", toggleTimer);
 
     $$(".tab").forEach((t) => t.addEventListener("click", () => showScreen(t.dataset.screen)));
 
-    // тап по таймеру — відкрити редактор часу (якщо таймер не запущений)
-    $("#time-display").addEventListener("click", () => {
-      if (!state.running) openTimePicker();
-    });
+    // тап по кружечку таймера = play/pause (замість FAB)
     $("#timer-wrap").addEventListener("click", (e) => {
-      // клік по кільцю/фону таймера теж відкриває пікер
-      if (!state.running && !e.target.closest(".modes") && !e.target.closest(".category-block") && !e.target.closest(".custom-time-btn")) {
-        openTimePicker();
-      }
+      // long-press / tap на time-display → редагування часу
+      toggleTimer();
     });
-    // явна кнопка «Свій час»
+    // явна кнопка «Свій час» → відкриває пікер
     const ctBtn = $("#btn-custom-time");
-    if (ctBtn) ctBtn.addEventListener("click", () => {
+    if (ctBtn) ctBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
       if (!state.running) openTimePicker();
     });
 
