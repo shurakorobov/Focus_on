@@ -960,7 +960,9 @@
       if (t.kind === "youtube" && t.embed_url) {
         const c = $("#yt-container");
         c.classList.remove("hidden");
-        c.innerHTML = '<iframe width="1" height="1" src="' + t.embed_url + '&autoplay=1" frameborder="0" allow="autoplay; encrypted-media"></iframe>';
+        // enablejsapi=1 + origin — дозволяють керувати play/pause через postMessage
+        const ytSrc = t.embed_url + "&enablejsapi=1&origin=" + encodeURIComponent(location.origin);
+        c.innerHTML = '<iframe width="1" height="1" src="' + ytSrc + '&autoplay=1" frameborder="0" allow="autoplay; encrypted-media"></iframe>';
       } else {
         const audio = $("#audio-el");
         audio.src = t.url;
@@ -974,7 +976,9 @@
     // Пауза активного треку
     pause() {
       const audio = $("#audio-el");
-      audio.pause();
+      if (audio.src) audio.pause();
+      // YouTube iframe: шлємо postMessage для паузи
+      this._ytCommand("pauseVideo");
       state.isPlaying = false;
       state.playerPlaying = false;
       this._refreshPlayStates();
@@ -984,11 +988,23 @@
     // Відновлення активного треку
     resume() {
       const audio = $("#audio-el");
-      audio.play().catch(() => {});
+      if (audio.src) audio.play().catch(() => {});
+      // YouTube iframe: шлємо postMessage для відтворення
+      this._ytCommand("playVideo");
       state.isPlaying = true;
       state.playerPlaying = true;
       this._refreshPlayStates();
       this._updateMediaPlaybackState("playing");
+    },
+
+    // Команда в YouTube iframe через postMessage API
+    _ytCommand(cmd) {
+      const iframe = $("#yt-container iframe");
+      if (!iframe || !iframe.contentWindow) return;
+      iframe.contentWindow.postMessage(
+        JSON.stringify({ event: "command", func: cmd, args: [] }),
+        "*"
+      );
     },
 
     // Запуск треку при старті таймера

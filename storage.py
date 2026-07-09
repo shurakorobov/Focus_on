@@ -20,7 +20,7 @@ from config import settings
 
 STATIC_TRACKS_DIR = Path(__file__).parent / "static" / "tracks"
 
-# Демо-треки, що постачаються з репозиторію
+# Демо-треки, що постачаються з репозиторію + вбудований робочий плейлист
 DEMO_TRACKS = [
     {
         "id": "demo_deep_calm",
@@ -37,6 +37,15 @@ DEMO_TRACKS = [
         "url": "/static/tracks/pulse_focus.wav",
         "title": "Pulse Focus",
         "author": "Focus OS Demo",
+    },
+    {
+        "id": "demo_focus_playlist",
+        "scope": "demo",
+        "kind": "youtube",
+        "url": "https://music.youtube.com/playlist?list=OLAK5uy_ld7f9jlp-xLjPLIt9Q_UtzzFLwKMCETXs",
+        "title": "Робоча збірка",
+        "author": "Netpeak Group",
+        "category": "deep_work",
     },
 ]
 
@@ -106,21 +115,37 @@ async def delete_from_supabase(
 
 
 def classify_url(url: str) -> str:
-    """Визначає тип треку за URL: 'youtube' або 'audio'."""
+    """Визначає тип треку за URL: 'youtube' (відео/плейлист) або 'audio'."""
     u = url.lower()
-    youtube_hosts = ("youtube.com", "youtu.be", "www.youtube.com", "m.youtube.com")
+    youtube_hosts = (
+        "youtube.com", "youtu.be", "www.youtube.com", "m.youtube.com",
+        "music.youtube.com",
+    )
     if any(h in u for h in youtube_hosts):
         return "youtube"
     return "audio"
 
 
+def youtube_playlist_id(url: str) -> str:
+    """Витягує ID плейлиста з YouTube/YouTube Music URL (порожньо, якщо немає)."""
+    import urllib.parse as up
+
+    parsed = up.urlparse(url)
+    q = up.parse_qs(parsed.query)
+    return (q.get("list") or [""])[0]
+
+
 def youtube_embed_url(url: str) -> str:
-    """Перетворює різні формати YouTube-посилань на embed-URL для iframe."""
+    """Перетворює різні формати YouTube-посилань на embed-URL для iframe.
+
+    Підтримує: окреме відео, відео+плейлист, плейлист (вкл. YouTube Music).
+    """
     import urllib.parse as up
 
     parsed = up.urlparse(url)
     q = up.parse_qs(parsed.query)
     host = (parsed.netloc or "").lower()
+    playlist_id = (q.get("list") or [""])[0]
 
     # youtu.be/<id>
     if host.endswith("youtu.be") and parsed.path:
@@ -133,9 +158,20 @@ def youtube_embed_url(url: str) -> str:
         vid = parsed.path.split("/embed/")[1].split("/")[0]
     else:
         vid = ""
+
+    # Плейлист без конкретного відео → videoseries з listType=playlist
+    if not vid and playlist_id:
+        return (
+            f"https://www.youtube.com/embed/videoseries"
+            f"?listType=playlist&list={playlist_id}&playsinline=1"
+        )
+
     if not vid:
         return url
-    return f"https://www.youtube.com/embed/{vid}?playsinline=1"
+    embed = f"https://www.youtube.com/embed/{vid}?playsinline=1"
+    if playlist_id:
+        embed += f"&list={playlist_id}"
+    return embed
 
 
 def youtube_video_id(url: str) -> str:
@@ -155,10 +191,35 @@ def youtube_video_id(url: str) -> str:
 
 
 async def fetch_youtube_title(client: "httpx.AsyncClient", url: str) -> str:
-    """Отримує назву відео через YouTube oEmbed (без ключа API).
+    """Отримує назву відео/плейлиста через YouTube oEmbed (без ключа API).
 
     Повертає порожній рядок, якщо не вдалося.
     """
+    import urllib.parse as up
+
+    # плейлист → шукаємо через oembed з URL плейлиста
+    pid = youtube_playlist_id(url)
+    if pid:
+        try:
+            r = await client.get(
+                "https://www.youtube.com/oembed",
+                params={
+                    "url": f"https://www.youtube.com/playlist?list={pid}",
+                    "format": "json",
+                },
+                timeout=8,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                title = (data.get("title") or "").strip()
+                author = (data.get("author_name") or "").strip()
+                if title and author:
+                    return f"{title} — {author}"
+                return title
+        except Exception:
+            pass
+        return ""
+
     vid = youtube_video_id(url)
     if not vid:
         return ""

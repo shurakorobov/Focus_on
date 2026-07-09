@@ -44,6 +44,19 @@ app = FastAPI(title="Focus OS API", lifespan=lifespan)
 # Ініціалізуємо БД при старті
 db.init_db()
 
+
+@app.middleware("http")
+async def disable_caching(request: Request, call_next):
+    """Вимикає кешування для /static/* і / — Telegram WebView інакше тримає
+    стару версію JS/CSS навіть зі зміною ?v=. no-cache дозволяє 304-валідацію,
+    але примусово перечитує при зміні."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 # Роздаємо статичні ассети (js/css/img)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -340,6 +353,12 @@ async def api_list_tracks(
         d["track_key"] = db.track_key(d)
         d["is_favorite"] = d["track_key"] in fav_keys
         d["is_pinned"] = d["track_key"] in pin_keys
+        # демо-треки youtube-типу теж отримують embed_url
+        if d.get("kind") == "youtube":
+            d["embed_url"] = storage.youtube_embed_url(d["url"])
+        # категорія для демо-треку (якщо задана)
+        if "category" not in d:
+            d["category"] = "other"
     is_admin = settings.is_admin(user["id"])
     upload_count = db.get_upload_count(user["id"])
     return {
