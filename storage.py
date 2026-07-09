@@ -190,14 +190,14 @@ def youtube_video_id(url: str) -> str:
     return ""
 
 
-async def fetch_youtube_title(client: "httpx.AsyncClient", url: str) -> str:
-    """Отримує назву відео/плейлиста через YouTube oEmbed (без ключа API).
+async def fetch_youtube_info(client: "httpx.AsyncClient", url: str) -> dict:
+    """Отримує назву та виконавця відео/плейлиста через YouTube oEmbed.
 
-    Повертає порожній рядок, якщо не вдалося.
+    Повертає {"title": str, "author": str} (можуть бути порожні).
     """
     import urllib.parse as up
 
-    # плейлист → шукаємо через oembed з URL плейлиста
+    # плейлист (вкл. YouTube Music) → oembed з URL плейлиста
     pid = youtube_playlist_id(url)
     if pid:
         try:
@@ -213,26 +213,54 @@ async def fetch_youtube_title(client: "httpx.AsyncClient", url: str) -> str:
                 data = r.json()
                 title = (data.get("title") or "").strip()
                 author = (data.get("author_name") or "").strip()
-                if title and author:
-                    return f"{title} — {author}"
-                return title
+                # YouTube Music плейлисти: title часто "Album - X" або "Single - X",
+                # author порожній. "Album"/"Single"/"EP" — це тип-префікси, не виконавці.
+                if title and not author and " - " in title:
+                    parts = title.split(" - ", 1)
+                    first = parts[0].strip().lower()
+                    type_prefixes = ("album", "single", "ep", "playlist", "mix", "compilation")
+                    if first in type_prefixes:
+                        # "Album - Netpeak Group" → title=Netpeak Group, author залишаємо порожнім
+                        title = parts[1].strip()
+                    else:
+                        # "Artist - Title" → author=Artist
+                        author = parts[0].strip()
+                        title = parts[1].strip()
+                return {"title": title, "author": author}
         except Exception:
             pass
-        return ""
+        return {"title": "", "author": ""}
 
+    # окреме відео
     vid = youtube_video_id(url)
     if not vid:
-        return ""
-    oembed_url = "https://www.youtube.com/oembed"
+        return {"title": "", "author": ""}
     try:
         r = await client.get(
-            oembed_url,
+            "https://www.youtube.com/oembed",
             params={"url": f"https://www.youtube.com/watch?v={vid}", "format": "json"},
             timeout=8,
         )
         if r.status_code == 200:
             data = r.json()
-            return (data.get("title") or "").strip()
+            title = (data.get("title") or "").strip()
+            author = (data.get("author_name") or "").strip()
+            # відео: title часто "Artist - Song", author_name вже дає артиста.
+            # Якщо title починається з "Author - " → прибрати дублювання.
+            if title and author and title.lower().startswith(author.lower() + " - "):
+                title = title[len(author) + 3:].strip()
+            # якщо author порожній, але є " - " — спробуємо розщепити
+            if title and not author and " - " in title:
+                parts = title.split(" - ", 1)
+                author = parts[0].strip()
+                title = parts[1].strip()
+            return {"title": title, "author": author}
     except Exception:
         pass
-    return ""
+    return {"title": "", "author": ""}
+
+
+# Зворотна сумісність: стара функція повертає лише title
+async def fetch_youtube_title(client: "httpx.AsyncClient", url: str) -> str:
+    info = await fetch_youtube_info(client, url)
+    return info.get("title", "")

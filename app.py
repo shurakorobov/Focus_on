@@ -384,14 +384,16 @@ async def api_add_track_url(
     kind = storage.classify_url(payload.url)
     title = payload.title
     author = payload.author
-    # якщо назва не вказана — намагаємось дістати її автоматично
+    # якщо назва не вказана — підтягуємо з YouTube (назва + виконавець)
     if not title:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 if kind == "youtube":
-                    title = await storage.fetch_youtube_title(client, payload.url)
-                    if title and " - " in title:
-                        author, title = title.split(" - ", 1)
+                    info = await storage.fetch_youtube_info(client, payload.url)
+                    if info.get("title"):
+                        title = info["title"]
+                    if not author and info.get("author"):
+                        author = info["author"]
         except Exception:
             pass
     tid = db.add_track(
