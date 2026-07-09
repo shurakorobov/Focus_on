@@ -338,6 +338,8 @@
     $("#profile-network").innerHTML = netHtml;
     // асинхронно міряємо швидкість
     measureNetworkSpeed();
+    // рендер блоку кешу музики
+    renderCacheBlock();
 
     // рекомендації
     const recs = data.recommendations || [];
@@ -367,6 +369,52 @@
     } catch (e) {
       if (el) el.textContent = "недоступно";
     }
+  }
+
+  // рендер блоку кешу музики в профілі
+  async function renderCacheBlock() {
+    const el = $("#profile-cache");
+    if (!el) return;
+    try {
+      const count = await AudioCache.count();
+      const bytes = await AudioCache.size();
+      const sizeLabel = humanBytes(bytes);
+      let nav = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : {};
+      const quota = nav.quota || 0;
+      const usage = nav.usage || bytes;
+      const pct = quota ? Math.min(100, Math.round((usage / quota) * 100)) : 0;
+
+      el.innerHTML =
+        '<div class="net-row"><span class="net-k">Кешовані треки</span>' +
+          '<span class="net-v">' + count + '</span></div>' +
+        '<div class="net-row"><span class="net-k">Розмір кешу</span>' +
+          '<span class="net-v">' + sizeLabel + '</span></div>' +
+        (quota ? '<div class="net-row"><span class="net-k">Зайнято пам’яті</span>' +
+          '<span class="net-v">' + pct + '%</span></div>' : '') +
+        '<div class="cache-actions">' +
+          (count > 0
+            ? '<button class="cache-btn danger" id="btn-cache-clear">Очистити кеш</button>'
+            : '<div class="hint-inline">Кеш порожній. Аудіотреки кешуватимуться автоматично при відтворенні — тоді музика зможе грати у фоні та офлайн.</div>') +
+        '</div>';
+
+      const clr = $("#btn-cache-clear");
+      if (clr) clr.addEventListener("click", async () => {
+        clr.disabled = true;
+        clr.textContent = "Чищу…";
+        await AudioCache.clear();
+        toast("Кеш очищено");
+        renderCacheBlock();
+      });
+    } catch (e) {
+      el.innerHTML = '<div class="hint-inline">Кеш недоступний у цьому браузері</div>';
+    }
+  }
+
+  function humanBytes(b) {
+    if (!b) return "0 Б";
+    if (b < 1024) return b + " Б";
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " КБ";
+    return (b / (1024 * 1024)).toFixed(1) + " МБ";
   }
 
   async function openSubscribe() {
@@ -950,12 +998,13 @@
     },
 
     // Запуск нового треку
-    play(t) {
+    async play(t) {
       // цей трек тепер активний
       state.currentTrack = t;
       state.selectedTrack = t; // для зв'язку з таймером
       state.isPlaying = true;
       state.playerPlaying = true;
+      this._refreshPlayStates();
 
       if (t.kind === "youtube" && t.embed_url) {
         const c = $("#yt-container");
@@ -963,13 +1012,39 @@
         // enablejsapi=1 + origin — дозволяють керувати play/pause через postMessage
         const ytSrc = t.embed_url + "&enablejsapi=1&origin=" + encodeURIComponent(location.origin);
         c.innerHTML = '<iframe width="1" height="1" src="' + ytSrc + '&autoplay=1" frameborder="0" allow="autoplay; encrypted-media"></iframe>';
+        this._setupMediaSession(t);
+        haptic("light");
       } else {
-        const audio = $("#audio-el");
-        audio.src = t.url;
-        audio.play().catch((e) => console.warn("audio play:", e.message));
+        // пряме аудіо — кешуємо на пристрій, граємо з blob: URL
+        this._playAudioCached(t);
       }
-      this._setupMediaSession(t);
-      this._refreshPlayStates();
+    },
+
+    // Відтворення прямих аудіо з локальним кешем (для фонового відтворення)
+    async _playAudioCached(t) {
+      const audio = $("#audio-el");
+      const cacheKey = t.track_key || ("db:" + t.id) || t.url;
+      // покажемо стан завантаження
+      const artEl = document.querySelector('.track-item[data-key="' + cacheKey + '"] .track-art');
+      if (artEl) artEl.classList.add("loading");
+
+      try {
+        const resolved = await AudioCache.resolveUrl(cacheKey, t.url, (p) => {
+          if (artEl) artEl.style.setProperty("--dl", Math.round(p * 100) + "%");
+        });
+        audio.src = resolved.url;
+        audio.setAttribute("data-cached", resolved.cached ? "1" : "0");
+        await audio.play();
+        this._setupMediaSession(t);
+      } catch (e) {
+        console.warn("audio play:", e.message);
+        toast("Не вдалося відтворити трек");
+      } finally {
+        if (artEl) {
+          artEl.classList.remove("loading");
+          artEl.style.removeProperty("--dl");
+        }
+      }
       haptic("light");
     },
 

@@ -649,6 +649,40 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   text-align: right; max-width: 60%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* Кеш музики */
+.cache-actions { margin-top: 12px; }
+.cache-btn {
+  width: 100%;
+  padding: 11px;
+  border-radius: var(--radius);
+  border: none;
+  font-size: 15px; font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s, opacity 0.15s;
+}
+.cache-btn:active { transform: scale(0.98); }
+.cache-btn:disabled { opacity: 0.5; }
+.cache-btn.danger {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
+}
+
+/* Завантаження треку в кеш — стан арт-іконки */
+.track-art.loading {
+  background: linear-gradient(135deg, var(--surface-3), var(--surface-2));
+  position: relative;
+}
+.track-art.loading .ico-play,
+.track-art.loading .ico-pause { opacity: 0 !important; }
+.track-art.loading::after {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: 12px;
+  background: conic-gradient(var(--accent) calc(var(--dl, 0%)), var(--surface-3) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+}
 .rec-item {
   font-size: 15px; color: var(--label);
   line-height: 1.5;
