@@ -7,16 +7,17 @@
   if (tg) {
     tg.ready();
     tg.expand();
-    if (tg.setHeaderColor) tg.setHeaderColor("#000000");
-    if (tg.setBackgroundColor) tg.setBackgroundColor("#000000");
+    if (tg.setHeaderColor) tg.setHeaderColor("#050208");
+    if (tg.setBackgroundColor) tg.setBackgroundColor("#050208");
+    if (tg.setBottomBarColor) tg.setBottomBarColor("#120a1f");
   }
 
   // ---------- Стан ----------
   const MODES = {
     deep_work: { label: "Глибока робота", dur: 50 * 60, color: "#bf5af2" },
-    focus: { label: "Фокус", dur: 25 * 60, color: "#30d158" },
-    short: { label: "Коротка сесія", dur: 15 * 60, color: "#ff9f0a" },
-    break: { label: "Перерва", dur: 5 * 60, color: "#ff453a" },
+    focus: { label: "Фокус", dur: 25 * 60, color: "#5ac8fa" },
+    short: { label: "Коротка сесія", dur: 15 * 60, color: "#ffd60a" },
+    break: { label: "Перерва", dur: 5 * 60, color: "#64d2ff" },
   };
   const CATEGORIES = {
     deep_work: { label: "DeepWork", emoji: "🧠", color: "#bf5af2" },

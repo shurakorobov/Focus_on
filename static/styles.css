@@ -1,27 +1,39 @@
-/* ===== Focus OS — Apple-style design ===== */
+/* ===== Focus OS — "Режим Бога" / gamma 40Hz вайб ===== */
 :root {
-  /* Системні кольори (Apple dark palette) */
-  --bg: #000000;
-  --surface: #1c1c1e;
-  --surface-2: #2c2c2e;
-  --surface-3: #3a3a3c;
-  --separator: #38383a;
+  /* Нейро-кібер палітра: глибокий космос + неоновий фіолет-синій */
+  --bg: #050208;                    /* майже чорний з фіолетовим відтінком */
+  --bg-grad-1: #0a0518;            /* радіальний градієнт центр */
+  --bg-grad-2: #050208;            /* радіальний градієнт краї */
+  --surface: #120a1f;              /* глибокий індиго */
+  --surface-2: #1d1233;            /* індиго-фіолет */
+  --surface-3: #2a1a4d;            /* світліший фіолет */
+  --separator: rgba(140, 100, 255, 0.12);
   --label: #ffffff;
-  --label-2: rgba(235, 235, 245, 0.6);   /* secondaryLabel */
-  --label-3: rgba(235, 235, 245, 0.3);   /* tertiaryLabel */
-  --accent: #0a84ff;       /* systemBlue (dark) */
-  --green: #30d158;        /* systemGreen */
-  --orange: #ff9f0a;       /* systemOrange */
-  --purple: #bf5af2;       /* systemPurple */
-  --red: #ff453a;          /* systemRed */
+  --label-2: rgba(200, 190, 255, 0.6);   /* secondaryLabel — з фіолетовим */
+  --label-3: rgba(160, 140, 255, 0.32);  /* tertiaryLabel */
+  --accent: #bf5af2;       /* неоновий фіолет */
+  --accent-2: #5ac8fa;     /* електрик-синій (для градієнтів) */
+  --accent-glow: rgba(191, 90, 242, 0.45);
+  --green: #30d158;
+  --orange: #ff9f0a;
+  --purple: #bf5af2;
+  --red: #ff453a;
   --teal: #64d2ff;
+  --gold: #ffd60a;         /* для premium-значків */
 
-  --mode-color: var(--green);
+  --mode-color: var(--accent);     /* дефолт — неоновий фіолет */
   --radius: 14px;
   --radius-lg: 22px;
 
   --tabbar-h: 58px;
   --titlebar-h: 64px;
+}
+
+/* Радіальний градієнт-фон тіла — "космічний пульс" */
+html, body {
+  background:
+    radial-gradient(ellipse 100% 70% at 50% 0%, var(--bg-grad-1) 0%, var(--bg-grad-2) 60%, var(--bg) 100%);
+  background-attachment: fixed;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -83,7 +95,7 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.ring { width: min(70vw, 255px); height: min(70vw, 255px); transform: rotate(-90deg); transition: transform 0.2s; }
+.ring { width: min(70vw, 255px); height: min(70vw, 255px); transform: rotate(-90deg); transition: transform 0.2s; filter: drop-shadow(0 0 18px var(--accent-glow)); }
 .ring-bg { fill: none; stroke: var(--surface-2); stroke-width: 12; }
 .ring-fg {
   fill: none;
@@ -94,6 +106,7 @@ body {
   stroke-dasharray: 791.68;
   stroke-dashoffset: 0;
   transition: stroke-dashoffset 0.95s linear, stroke 0.4s;
+  filter: drop-shadow(0 0 8px var(--accent-glow));
 }
 .timer-center {
   position: absolute; inset: 0;
@@ -167,6 +180,8 @@ body {
 .mode-btn.active {
   background: var(--surface-2);
   color: var(--label);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 .mode-btn.active .mode-dur { color: var(--mode-color); }
 
@@ -212,7 +227,7 @@ body {
   flex-shrink: 0;
   height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
-  background: rgba(28, 28, 30, 0.72);
+  background: rgba(18, 10, 31, 0.82);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-top: 0.5px solid var(--separator);
@@ -232,7 +247,7 @@ body {
   padding-top: 8px;
 }
 .tab span { font-size: 10px; font-weight: 500; }
-.tab.active { color: var(--accent); }
+.tab.active { color: var(--accent); filter: drop-shadow(0 0 8px var(--accent-glow)); }
 
 /* ===== Статистика ===== */
 .stats-scroll { overflow-y: auto; padding: 8px 0 24px; }
@@ -471,9 +486,11 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 .seg-choice input:checked + span { border-color: var(--accent); color: var(--label); }
 
 .primary-btn {
-  background: var(--accent); color: #fff; border: none;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff; border: none;
   border-radius: 12px; padding: 15px; font-size: 17px; font-weight: 600;
-  cursor: pointer; transition: transform 0.1s, opacity 0.15s;
+  cursor: pointer; transition: transform 0.1s, opacity 0.15s, box-shadow 0.2s;
+  box-shadow: 0 4px 20px var(--accent-glow);
 }
 .primary-btn:active { transform: scale(0.98); }
 .primary-btn:disabled { opacity: 0.5; }
@@ -558,6 +575,7 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 .chip.active {
   background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
   border-color: var(--accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .category-select { margin: 10px 0; }
 .cs-label {
@@ -651,8 +669,9 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   margin-bottom: 8px;
 }
 .plan-badge.premium {
-  background: color-mix(in srgb, var(--orange) 22%, var(--surface));
-  color: var(--orange);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 30%, var(--surface)), color-mix(in srgb, var(--accent) 20%, var(--surface)));
+  color: var(--gold);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--gold) 30%, transparent);
 }
 .plan-badge.free {
   background: var(--surface-2);
