@@ -157,13 +157,13 @@ def get_conn():
 
 def _last_id(conn, cur, table: str) -> int:
     """Повертає id щойно вставленого запису.
-    SQLite: cur.lastrowid. PostgreSQL: currval(pg_get_serial_sequence)."""
+    SQLite: cur.lastrowid. PostgreSQL: lastval() поточної сесії."""
     if not _IS_PG:
         return int(cur.lastrowid)
-    # PG: витягуємо поточне значення послідовності для цієї таблиці
-    seq_cur = conn.execute(f"SELECT currval(pg_get_serial_sequence(%s, 'id'))", (table,))
+    # PG: lastval() повертає останнє значення будь-якої послідовності в цій сесії
+    seq_cur = conn.execute("SELECT lastval() AS id")
     row = seq_cur.fetchone()
-    return int(row["currval"]) if row else 0
+    return int(row["id"]) if row and row["id"] else 0
 
 
 def _add_column(conn, table: str, column: str, decl: str) -> None:
