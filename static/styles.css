@@ -260,8 +260,8 @@ body {
 }
 .track-list .list-group { margin-bottom: 22px; }
 .track-item {
-  display: flex; align-items: center; gap: 14px;
-  padding: 12px 16px;
+  display: block;
+  padding: 0;
   border-bottom: 0.5px solid var(--separator);
   cursor: pointer;
   position: relative;
@@ -272,7 +272,14 @@ body {
   will-change: transform;
 }
 .track-item:last-child { border-bottom: none; }
-.track-item:active { background: var(--surface-2); }
+.track-item-inner {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 16px;
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
+}
+.track-item:active .track-item-inner { background: var(--surface-2); }
 .track-item.playing .track-title { color: var(--accent); }
 
 /* червона кнопка видалення під елементом (відкривається свайпом) */
@@ -284,6 +291,7 @@ body {
   display: flex; align-items: center; justify-content: center;
   color: #fff;
   font-size: 15px; font-weight: 600;
+  z-index: 0;
 }
 .track-delete-bg.hidden { display: none; }
 

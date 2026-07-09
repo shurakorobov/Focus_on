@@ -464,10 +464,13 @@
       });
 
       // клік по відкритій кнопці видалення
-      delBg.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.deleteTrack(t, el);
-      });
+      const delBtn = el.querySelector(".track-delete-bg");
+      if (delBtn) {
+        delBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.deleteTrack(t, el);
+        });
+      }
     },
 
     // ---------- Inline-редагування назви ----------
