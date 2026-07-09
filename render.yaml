@@ -7,11 +7,11 @@ services:
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.13.1
+        value: 3.13.7
       - key: BOT_TOKEN
         sync: false
       - key: ADMIN_IDS
-        value: 292856117
+        value: "292856117"
       - key: WEBAPP_URL
         sync: false
     healthCheckPath: /api/health
