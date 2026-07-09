@@ -155,6 +155,17 @@ def get_conn():
         conn.close()
 
 
+def _last_id(conn, cur, table: str) -> int:
+    """Повертає id щойно вставленого запису.
+    SQLite: cur.lastrowid. PostgreSQL: currval(pg_get_serial_sequence)."""
+    if not _IS_PG:
+        return int(cur.lastrowid)
+    # PG: витягуємо поточне значення послідовності для цієї таблиці
+    seq_cur = conn.execute(f"SELECT currval(pg_get_serial_sequence(%s, 'id'))", (table,))
+    row = seq_cur.fetchone()
+    return int(row["currval"]) if row else 0
+
+
 def _add_column(conn, table: str, column: str, decl: str) -> None:
     """Додає колонку, якщо її ще немає (ідемпотентно). SQLite: PRAGMA, PG: info_schema."""
     if _IS_PG:
@@ -648,7 +659,7 @@ def add_track(
                 "UPDATE users SET upload_count = upload_count + 1 WHERE tg_id = ?",
                 (tg_id,),
             )
-        return int(cur.lastrowid)
+        return _last_id(conn, cur, "tracks")
 
 
 def _load_meta(conn: sqlite3.Connection, tg_id: int) -> dict[str, dict]:
@@ -846,7 +857,7 @@ def save_bug_report(
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
-        return int(cur.lastrowid)
+        return _last_id(conn, cur, "bug_reports")
 
 
 # ------------------------------ платежі -------------------------------------
@@ -863,7 +874,7 @@ def record_payment(
             """,
             (tg_id, order_id, amount, status, raw, datetime.now(timezone.utc).isoformat()),
         )
-        return int(cur.lastrowid)
+        return _last_id(conn, cur, "payments")
 
 
 # ------------------------------ адмін-статистика ----------------------------
