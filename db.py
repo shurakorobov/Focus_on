@@ -1,14 +1,18 @@
 """SQLite сховище для сесій фокусу.
 
 Схема:
-- users:    профілі користувачів (tg id, ім'я, аватар, налаштування)
-- sessions: завершені сесії фокусу (режим, тривалість, дата)
+- users:           профілі користувачів (tg id, ім'я, аватар, тариф)
+- sessions:        завершені сесії фокусу (режим, тривалість, категорія, дата)
+- tracks:          музичні треки (scope admin/user, kind audio/youtube, категорія)
+- track_user_meta: бажане/закріплення треків на користувача
+- bug_reports:     звіти про баги
+- payments:        лог платежів LiqPay
 """
 from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -20,6 +24,16 @@ FOCUS_MODES = {
     "focus": {"label": "Focus", "duration": 25 * 60, "color": "#3DDC97"},
     "short": {"label": "Short Focus", "duration": 15 * 60, "color": "#FFB454"},
     "break": {"label": "Break", "duration": 5 * 60, "color": "#FF6B6B"},
+}
+
+# Категорії діяльності ("над чим працюємо?")
+CATEGORIES = {
+    "deep_work": {"label": "DeepWork", "emoji": "🧠", "color": "#bf5af2"},
+    "creative": {"label": "Креатив", "emoji": "🎨", "color": "#ff9f0a"},
+    "learning": {"label": "Навчання", "emoji": "📚", "color": "#0a84ff"},
+    "reading": {"label": "Читання", "emoji": "📖", "color": "#64d2ff"},
+    "training": {"label": "Тренування", "emoji": "💪", "color": "#30d158"},
+    "other": {"label": "Інше", "emoji": "✨", "color": "#8e8e93"},
 }
 
 
@@ -45,8 +59,69 @@ def get_conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _add_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """Додає колонку, якщо її ще немає (ідемпотентно)."""
+    cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def migrate() -> None:
+    """Безпечна міграція схеми під існуючу базу."""
+    with get_conn() as conn:
+        _add_column(conn, "tracks", "category", "TEXT NOT NULL DEFAULT 'other'")
+        _add_column(conn, "sessions", "category", "TEXT NOT NULL DEFAULT 'other'")
+        _add_column(conn, "users", "plan", "TEXT NOT NULL DEFAULT 'free'")
+        _add_column(conn, "users", "plan_expires_at", "TEXT NOT NULL DEFAULT ''")
+        _add_column(conn, "users", "upload_count", "INTEGER NOT NULL DEFAULT 0")
+
+        conn.executescript(
+            """
+            -- Бажане / закріплені треки + призначення категорії на користувача.
+            CREATE TABLE IF NOT EXISTS track_user_meta (
+                tg_id        INTEGER NOT NULL,
+                track_key    TEXT NOT NULL,        -- 'demo:<id>' | 'db:<id>'
+                favorite     INTEGER NOT NULL DEFAULT 0,
+                pinned       INTEGER NOT NULL DEFAULT 0,
+                category     TEXT NOT NULL DEFAULT 'other',
+                created_at   TEXT NOT NULL,
+                PRIMARY KEY (tg_id, track_key),
+                FOREIGN KEY (tg_id) REFERENCES users(tg_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS bug_reports (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_id        INTEGER,
+                message      TEXT NOT NULL DEFAULT '',
+                user_agent   TEXT NOT NULL DEFAULT '',
+                ip           TEXT NOT NULL DEFAULT '',
+                region       TEXT NOT NULL DEFAULT '',
+                platform     TEXT NOT NULL DEFAULT '',
+                screen       TEXT NOT NULL DEFAULT '',
+                created_at   TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS payments (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_id        INTEGER NOT NULL,
+                order_id     TEXT NOT NULL,
+                amount       REAL NOT NULL DEFAULT 0,
+                status       TEXT NOT NULL DEFAULT '',
+                raw          TEXT NOT NULL DEFAULT '',
+                created_at   TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sessions_category ON sessions(category);
+            CREATE INDEX IF NOT EXISTS idx_sessions_finished ON sessions(finished_at);
+            CREATE INDEX IF NOT EXISTS idx_tracks_category ON tracks(category);
+            CREATE INDEX IF NOT EXISTS idx_track_meta_tg ON track_user_meta(tg_id);
+            CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);
+            """
+        )
+
+
 def init_db() -> None:
-    """Створює таблиці, якщо їх ще немає."""
+    """Створює таблиці, якщо їх ще немає, і виконує міграції."""
     Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         conn.executescript(
@@ -94,6 +169,15 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_tracks_tg ON tracks(tg_id);
             """
         )
+    migrate()
+
+
+def track_key(t: dict) -> str:
+    """Уніфікований ключ треку: 'demo:<id>' для демо, 'db:<id>' для БД-треку."""
+    scope = t.get("scope", "")
+    if scope == "demo":
+        return f"demo:{t.get('id')}"
+    return f"db:{t.get('id')}"
 
 
 # ----------------------------- користувачі ----------------------------------
@@ -135,6 +219,64 @@ def get_user(tg_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+# ------------------------------ тариф ---------------------------------------
+
+
+def get_user_plan(tg_id: int) -> dict:
+    """Повертає {plan, is_premium, plan_expires_at}."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT plan, plan_expires_at FROM users WHERE tg_id = ?", (tg_id,)
+        ).fetchone()
+    if not row:
+        return {"plan": "free", "is_premium": False, "plan_expires_at": ""}
+    return {"plan": row["plan"], "is_premium": _is_premium_row(row), "plan_expires_at": row["plan_expires_at"] or ""}
+
+
+def _is_premium_row(row) -> bool:
+    if row["plan"] != "premium":
+        return False
+    expires = row["plan_expires_at"] or ""
+    if not expires:
+        return True  # без обмеження в часі
+    try:
+        return datetime.fromisoformat(expires) > datetime.now(timezone.utc)
+    except ValueError:
+        return True
+
+
+def is_premium(tg_id: int) -> bool:
+    return get_user_plan(tg_id)["is_premium"]
+
+
+def set_user_plan(tg_id: int, plan: str, days: int = 0) -> str:
+    """Встановлює тариф. Якщо plan='premium' і days>0 — виставляє термін дії.
+    Повертає рядок дати завершення ISO (або '')."""
+    expires = ""
+    if plan == "premium" and days > 0:
+        # подовжуємо з поточного моменту (або з кінця попередньої підписки)
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT plan_expires_at FROM users WHERE tg_id = ?", (tg_id,)
+            ).fetchone()
+            prev = row["plan_expires_at"] if row else ""
+        base = datetime.now(timezone.utc)
+        if prev:
+            try:
+                prev_dt = datetime.fromisoformat(prev)
+                if prev_dt > base:
+                    base = prev_dt
+            except ValueError:
+                pass
+        expires = (base + timedelta(days=days)).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE users SET plan = ?, plan_expires_at = ? WHERE tg_id = ?",
+            (plan, expires, tg_id),
+        )
+    return expires
+
+
 # ------------------------------ сесії ---------------------------------------
 
 
@@ -145,16 +287,18 @@ def save_session(
     actual: int,
     completed: bool,
     started_at: str,
+    category: str = "other",
 ) -> None:
     """Зберігає завершену сесію фокусу та оновлює підсумки користувача."""
+    category = category if category in CATEGORIES else "other"
     finished_at = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO sessions (tg_id, mode, planned, actual, completed, started_at, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions (tg_id, mode, planned, actual, completed, started_at, finished_at, category)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (tg_id, mode, planned, actual, int(completed), started_at, finished_at),
+            (tg_id, mode, planned, actual, int(completed), started_at, finished_at, category),
         )
         # рахуємо в загальний час лише успішно завершені сесії
         if completed:
@@ -165,7 +309,7 @@ def save_session(
 
 
 def get_stats(tg_id: int, limit: int = 50) -> dict:
-    """Повертає статистику користувача для екрана Stats."""
+    """Повертає базову статистику користувача (безкоштовний рівень)."""
     with get_conn() as conn:
         total_row = conn.execute(
             "SELECT COALESCE(SUM(actual), 0) AS s, COUNT(*) AS c FROM sessions WHERE tg_id = ? AND completed = 1",
@@ -194,7 +338,7 @@ def get_stats(tg_id: int, limit: int = 50) -> dict:
 
         recent = conn.execute(
             """
-            SELECT mode, actual, completed, finished_at
+            SELECT mode, actual, completed, finished_at, category
             FROM sessions
             WHERE tg_id = ?
             ORDER BY finished_at DESC
@@ -213,6 +357,122 @@ def get_stats(tg_id: int, limit: int = 50) -> dict:
     }
 
 
+def _range_start(range_key: str) -> datetime | None:
+    """Повертає початок періоду (UTC) або None = весь час."""
+    now = datetime.now(timezone.utc)
+    if range_key == "week":
+        return now - timedelta(days=7)
+    if range_key == "month":
+        return now - timedelta(days=30)
+    if range_key == "year":
+        return now - timedelta(days=365)
+    return None  # all
+
+
+def get_stats_premium(tg_id: int, range_key: str = "month", category: str | None = None) -> dict:
+    """Преміум-статистика: за категоріями, по днях (для графіка), серії."""
+    start = _range_start(range_key)
+
+    def time_clause() -> tuple[str, tuple]:
+        params: tuple = (tg_id,)
+        sql = "tg_id = ? AND completed = 1"
+        if start is not None:
+            sql += " AND finished_at >= ?"
+            params = (tg_id, start.isoformat())
+        if category:
+            sql += " AND category = ?"
+            params = params + (category,)
+        return sql, params
+
+    with get_conn() as conn:
+        sql, params = time_clause()
+        by_category = conn.execute(
+            f"""
+            SELECT category, COUNT(*) AS c, COALESCE(SUM(actual), 0) AS s
+            FROM sessions WHERE {sql}
+            GROUP BY category ORDER BY s DESC
+            """,
+            params,
+        ).fetchall()
+
+        sql2, params2 = time_clause()
+        by_day = conn.execute(
+            f"""
+            SELECT date(finished_at) AS d, COALESCE(SUM(actual), 0) AS s, COUNT(*) AS c
+            FROM sessions WHERE {sql2}
+            GROUP BY d ORDER BY d ASC
+            """,
+            params2,
+        ).fetchall()
+
+        sql3, params3 = time_clause()
+        total_row = conn.execute(
+            f"SELECT COALESCE(SUM(actual),0) AS s, COUNT(*) AS c FROM sessions WHERE {sql3}",
+            params3,
+        ).fetchone()
+
+        # повна історія (преміум)
+        sql4, params4 = time_clause()
+        history = conn.execute(
+            f"""
+            SELECT mode, actual, completed, finished_at, category, started_at
+            FROM sessions WHERE tg_id = ?
+            ORDER BY finished_at DESC LIMIT 500
+            """,
+            (tg_id,),
+        ).fetchall()
+
+        # серія (streak) по днях із завершеними сесіями
+        days = conn.execute(
+            """
+            SELECT DISTINCT date(finished_at) AS d
+            FROM sessions WHERE tg_id = ? AND completed = 1
+            ORDER BY d DESC
+            """,
+            (tg_id,),
+        ).fetchall()
+
+    # рахуємо поточну серію
+    streak = 0
+    today_date = datetime.now(timezone.utc).date()
+    day_set = {row["d"] for row in days}
+    cursor = today_date
+    # дозволяємо "сьогодні ще немає сесії" — починаємо з учора
+    if today_date.isoformat() not in day_set:
+        cursor = today_date - timedelta(days=1)
+    while cursor.isoformat() in day_set:
+        streak += 1
+        cursor = cursor - timedelta(days=1)
+
+    best_streak = 0
+    if days:
+        sorted_days = sorted({row["d"] for row in days})
+        cur = 1
+        best_streak = 1
+        for i in range(1, len(sorted_days)):
+            prev = datetime.fromisoformat(sorted_days[i - 1]).date()
+            this = datetime.fromisoformat(sorted_days[i]).date()
+            if (this - prev).days == 1:
+                cur += 1
+                best_streak = max(best_streak, cur)
+            else:
+                cur = 1
+
+    return {
+        "range": range_key,
+        "category": category,
+        "total_seconds": int(total_row["s"]),
+        "total_sessions": int(total_row["c"]),
+        "by_category": [dict(r) for r in by_category],
+        "by_day": [dict(r) for r in by_day],
+        "history": [dict(r) for r in history],
+        "current_streak": streak,
+        "best_streak": best_streak,
+        "categories": CATEGORIES,
+        "modes": FOCUS_MODES,
+    }
+
+
 # ------------------------------ музика --------------------------------------
 
 
@@ -223,32 +483,138 @@ def add_track(
     url: str,
     title: str = "",
     author: str = "",
+    category: str = "other",
 ) -> int:
     """Додає трек (адмінський або особистий). Повертає id нового запису."""
+    category = category if category in CATEGORIES else "other"
     with get_conn() as conn:
         cur = conn.execute(
             """
-            INSERT INTO tracks (tg_id, scope, kind, url, title, author, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tracks (tg_id, scope, kind, url, title, author, created_at, category)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (tg_id, scope, kind, url, title, author, datetime.now(timezone.utc).isoformat()),
+            (tg_id, scope, kind, url, title, author, datetime.now(timezone.utc).isoformat(), category),
         )
+        if scope == "user":
+            conn.execute(
+                "UPDATE users SET upload_count = upload_count + 1 WHERE tg_id = ?",
+                (tg_id,),
+            )
         return int(cur.lastrowid)
 
 
-def list_tracks(tg_id: int) -> list[dict]:
-    """Повертає треки, доступні користувачу: усі адмінські + його особисті."""
+def _load_meta(conn: sqlite3.Connection, tg_id: int) -> dict[str, dict]:
+    rows = conn.execute(
+        "SELECT track_key, favorite, pinned, category FROM track_user_meta WHERE tg_id = ?",
+        (tg_id,),
+    ).fetchall()
+    return {row["track_key"]: dict(row) for row in rows}
+
+
+def _ensure_meta(conn: sqlite3.Connection, tg_id: int, key: str) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO track_user_meta (tg_id, track_key, favorite, pinned, category, created_at)
+        VALUES (?, ?, 0, 0, 'other', ?)
+        """,
+        (tg_id, key, datetime.now(timezone.utc).isoformat()),
+    )
+
+
+def list_tracks(tg_id: int, category: str | None = None) -> list[dict]:
+    """Повертає треки, доступні користувачу: усі адмінські + його особисті.
+    Додає поля is_favorite, is_pinned, track_key з track_user_meta."""
+    cat_sql = ""
+    params: tuple = (tg_id,)
+    if category and category != "all":
+        cat_sql = " AND category = ?"
+        params = (tg_id, category)
     with get_conn() as conn:
         rows = conn.execute(
-            """
-            SELECT id, tg_id, scope, kind, url, title, author, created_at
+            f"""
+            SELECT id, tg_id, scope, kind, url, title, author, created_at, category
             FROM tracks
-            WHERE scope = 'admin' OR tg_id = ?
+            WHERE (scope = 'admin' OR tg_id = ?){cat_sql}
             ORDER BY scope DESC, created_at DESC
             """,
+            params,
+        ).fetchall()
+        meta = _load_meta(conn, tg_id)
+    result = []
+    for r in rows:
+        d = dict(r)
+        key = track_key(d)
+        m = meta.get(key, {})
+        d["track_key"] = key
+        d["is_favorite"] = bool(m.get("favorite", 0))
+        d["is_pinned"] = bool(m.get("pinned", 0))
+        result.append(d)
+    return result
+
+
+def set_track_category_for_user(tg_id: int, key: str, category: str) -> None:
+    """Призначає категорію треку в межах користувача (для демо/адмінських треків)."""
+    category = category if category in CATEGORIES else "other"
+    with get_conn() as conn:
+        _ensure_meta(conn, tg_id, key)
+        conn.execute(
+            "UPDATE track_user_meta SET category = ? WHERE tg_id = ? AND track_key = ?",
+            (category, tg_id, key),
+        )
+
+
+def toggle_favorite(tg_id: int, key: str) -> bool:
+    """Перемикає «бажане». Повертає новий стан."""
+    with get_conn() as conn:
+        _ensure_meta(conn, tg_id, key)
+        conn.execute(
+            """
+            UPDATE track_user_meta SET favorite = CASE favorite WHEN 1 THEN 0 ELSE 1 END
+            WHERE tg_id = ? AND track_key = ?
+            """,
+            (tg_id, key),
+        )
+        row = conn.execute(
+            "SELECT favorite FROM track_user_meta WHERE tg_id = ? AND track_key = ?",
+            (tg_id, key),
+        ).fetchone()
+    return bool(row["favorite"]) if row else False
+
+
+def toggle_pin(tg_id: int, key: str) -> bool:
+    """Перемикає «закріпити». Повертає новий стан."""
+    with get_conn() as conn:
+        _ensure_meta(conn, tg_id, key)
+        conn.execute(
+            """
+            UPDATE track_user_meta SET pinned = CASE pinned WHEN 1 THEN 0 ELSE 1 END
+            WHERE tg_id = ? AND track_key = ?
+            """,
+            (tg_id, key),
+        )
+        row = conn.execute(
+            "SELECT pinned FROM track_user_meta WHERE tg_id = ? AND track_key = ?",
+            (tg_id, key),
+        ).fetchone()
+    return bool(row["pinned"]) if row else False
+
+
+def list_favorites(tg_id: int) -> list[str]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT track_key FROM track_user_meta WHERE tg_id = ? AND favorite = 1",
             (tg_id,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [r["track_key"] for r in rows]
+
+
+def list_pinned(tg_id: int) -> list[str]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT track_key FROM track_user_meta WHERE tg_id = ? AND pinned = 1",
+            (tg_id,),
+        ).fetchall()
+    return [r["track_key"] for r in rows]
 
 
 def delete_track(tg_id: int, track_id: int, is_admin: bool) -> bool:
@@ -290,3 +656,60 @@ def is_track_owner_or_admin(tg_id: int, track_id: int, is_admin: bool) -> bool:
             "SELECT 1 FROM tracks WHERE id = ? AND tg_id = ?", (track_id, tg_id)
         ).fetchone()
         return row is not None
+
+
+def get_upload_count(tg_id: int) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT upload_count FROM users WHERE tg_id = ?", (tg_id,)
+        ).fetchone()
+    return int(row["upload_count"]) if row else 0
+
+
+# ------------------------------ баг-репорти ---------------------------------
+
+
+def save_bug_report(
+    tg_id: int,
+    message: str,
+    user_agent: str = "",
+    ip: str = "",
+    region: str = "",
+    platform: str = "",
+    screen: str = "",
+) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO bug_reports (tg_id, message, user_agent, ip, region, platform, screen, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tg_id,
+                message,
+                user_agent,
+                ip,
+                region,
+                platform,
+                screen,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+# ------------------------------ платежі -------------------------------------
+
+
+def record_payment(
+    tg_id: int, order_id: str, amount: float, status: str, raw: str = ""
+) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO payments (tg_id, order_id, amount, status, raw, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (tg_id, order_id, amount, status, raw, datetime.now(timezone.utc).isoformat()),
+        )
+        return int(cur.lastrowid)

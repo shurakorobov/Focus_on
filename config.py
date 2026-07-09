@@ -35,6 +35,20 @@ class Settings:
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     SUPABASE_BUCKET: str = os.getenv("SUPABASE_BUCKET", "tracks")
 
+    # LiqPay — оплата преміум-підписки карткою.
+    # Якщо ключі порожні — оплата недоступна, премиум вмикається вручну (admin).
+    LIQPAY_PUBLIC_KEY: str = os.getenv("LIQPAY_PUBLIC_KEY", "").strip()
+    LIQPAY_PRIVATE_KEY: str = os.getenv("LIQPAY_PRIVATE_KEY", "").strip()
+    PREMIUM_PRICE_UAH: int = int(os.getenv("PREMIUM_PRICE_UAH", "100"))
+    PREMIUM_DURATION_DAYS: int = int(os.getenv("PREMIUM_DURATION_DAYS", "30"))
+    # Ліміт завантажень треків для безкоштовних користувачів.
+    FREE_UPLOAD_LIMIT: int = int(os.getenv("FREE_UPLOAD_LIMIT", "5"))
+
+    # Куди слати баг-репорти (Telegram chat_id). За замовч. — перший адмін.
+    ADMIN_CHAT_ID: int = int(os.getenv("ADMIN_CHAT_ID", "0")) or (
+        ADMIN_IDS[0] if ADMIN_IDS else 0
+    )
+
     @property
     def is_configured(self) -> bool:
         """Чи достатньо налаштувань для повноцінної роботи бота."""
@@ -47,6 +61,10 @@ class Settings:
     @property
     def supabase_enabled(self) -> bool:
         return bool(self.SUPABASE_URL) and bool(self.SUPABASE_KEY)
+
+    @property
+    def liqpay_enabled(self) -> bool:
+        return bool(self.LIQPAY_PUBLIC_KEY) and bool(self.LIQPAY_PRIVATE_KEY)
 
     def is_admin(self, tg_id: int) -> bool:
         return tg_id in self.ADMIN_IDS

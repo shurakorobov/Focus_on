@@ -18,7 +18,15 @@
     short: { label: "Коротка сесія", dur: 15 * 60, color: "#ff9f0a" },
     break: { label: "Перерва", dur: 5 * 60, color: "#ff453a" },
   };
-  const TITLES = { timer: "Focus", stats: "Статистика", music: "Музика" };
+  const CATEGORIES = {
+    deep_work: { label: "DeepWork", emoji: "🧠", color: "#bf5af2" },
+    creative: { label: "Креатив", emoji: "🎨", color: "#ff9f0a" },
+    learning: { label: "Навчання", emoji: "📚", color: "#0a84ff" },
+    reading: { label: "Читання", emoji: "📖", color: "#64d2ff" },
+    training: { label: "Тренування", emoji: "💪", color: "#30d158" },
+    other: { label: "Інше", emoji: "✨", color: "#8e8e93" },
+  };
+  const TITLES = { timer: "Focus", stats: "Статистика", music: "Музика", profile: "Профіль" };
 
   const state = {
     screen: "timer",
@@ -33,6 +41,16 @@
     playerPlaying: false,
     selectedTrack: null,   // трек, обраний для фокусу
     customMode: false,     // чи встановлено свій час вручну
+    // нові поля
+    category: "other",         // поточна категорія на таймері
+    musicCategory: "all",      // фільтр категорій на екрані Музика
+    addCategory: "other",      // категорія в модалці додавання (URL)
+    uploadCategory: "other",   // категорія в модалці додавання (файл)
+    isPremium: false,
+    planExpiresAt: "",
+    premiumPriceUah: 100,
+    premiumRange: "month",     // діапазон на преміум-статистиці
+    me: null,                  // кеш /api/me
   };
 
   // ---------- DOM ----------
@@ -66,6 +84,19 @@
       else if (type === "error") tg.HapticFeedback.notificationOccurred("error");
     } catch (e) {}
   }
+  function platformInfo() {
+    const ua = navigator.userAgent || "";
+    const platform = (tg && tg.platform) || "unknown";
+    const v = (tg && tg.version) || "?";
+    return `${platform} · TG ${v} · ${ua.slice(0, 60)}`;
+  }
+  function fmtDate(iso) {
+    if (!iso) return "";
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString("uk-UA", { day: "numeric", month: "long", year: "numeric" });
+    } catch (e) { return iso; }
+  }
 
   // ---------- Тост ----------
   let toastTimer = null;
@@ -91,6 +122,27 @@
     $("#ring-fg").style.strokeDashoffset = RING_LEN * (1 - progress);
   }
 
+  // ---------- Чіпи категорій ----------
+  function buildChips(container, current, onSelect, includeAll) {
+    container.innerHTML = "";
+    if (includeAll) {
+      const c = document.createElement("button");
+      c.className = "chip" + (current === "all" ? " active" : "");
+      c.textContent = "Усі";
+      c.addEventListener("click", () => onSelect("all"));
+      container.appendChild(c);
+    }
+    Object.keys(CATEGORIES).forEach((key) => {
+      const meta = CATEGORIES[key];
+      const c = document.createElement("button");
+      c.className = "chip" + (current === key ? " active" : "");
+      c.textContent = meta.emoji + " " + meta.label;
+      if (current === key) c.style.borderColor = meta.color;
+      c.addEventListener("click", () => onSelect(key));
+      container.appendChild(c);
+    });
+  }
+
   // ---------- Навігація ----------
   function showScreen(name) {
     state.screen = name;
@@ -102,6 +154,7 @@
     $(".fab").classList.toggle("hidden", name !== "timer");
     if (name === "stats") loadStats();
     if (name === "music") Music.load();
+    if (name === "profile") loadProfile();
   }
 
   // ---------- Таймер ----------
@@ -194,6 +247,7 @@
       actual: completed ? state.totalSeconds : elapsed,
       completed: completed,
       started_at: state.startedAt || new Date().toISOString(),
+      category: state.category,
     };
 
     if (completed) {
@@ -219,10 +273,78 @@
   async function loadProfile() {
     try {
       const data = await API.me();
-      const u = data.user || {};
-      const name = u.first_name || u.username || "";
-      // залишаємо заголовок "Focus" — Apple-style
-    } catch (e) {}
+      state.me = data;
+      state.isPremium = !!data.is_premium;
+      state.planExpiresAt = data.plan_expires_at || "";
+      state.premiumPriceUah = data.premium_price_uah || 100;
+      renderProfile(data);
+    } catch (e) {
+      $("#profile-head").innerHTML = '<div class="hint-inline">Не вдалося завантажити профіль</div>';
+    }
+  }
+
+  function renderProfile(data) {
+    const u = data.user || {};
+    const p = data.profile || {};
+    const name = [u.first_name, u.last_name].filter(Boolean).join(" ") || u.username || "Користувач";
+    const uname = u.username ? "@" + u.username : "—";
+
+    // шапка
+    let head = '<div class="profile-head">';
+    if (u.photo_url) {
+      head += '<img class="profile-avatar" src="' + escapeHtml(u.photo_url) + '" alt="" />';
+    } else {
+      const initial = (u.first_name || "?").charAt(0).toUpperCase();
+      head += '<div class="profile-avatar placeholder">' + escapeHtml(initial) + '</div>';
+    }
+    head += '<div class="profile-info"><div class="profile-name">' + escapeHtml(name) + '</div>';
+    head += '<div class="profile-sub">' + escapeHtml(uname) + '</div></div></div>';
+    $("#profile-head").innerHTML = head;
+
+    // тариф
+    let plan;
+    if (data.is_premium) {
+      const exp = data.plan_expires_at ? "до " + fmtDate(data.plan_expires_at) : "без обмежень";
+      plan = '<div class="plan-badge premium">⭐ Premium</div><div class="plan-exp">Діє ' + exp + '</div>';
+    } else {
+      plan = '<div class="plan-badge free">Безкоштовний</div>';
+      plan += '<div class="plan-exp">Преміум відкриває деталізовану статистику, графіки та безліміт треків</div>';
+      plan += '<button class="primary-btn" id="btn-upgrade">Розблокувати — ' + state.premiumPriceUah + '₴/міс</button>';
+    }
+    $("#profile-plan").innerHTML = plan;
+
+    // рекомендації
+    const recs = data.recommendations || [];
+    if (recs.length) {
+      $("#profile-recommendations").innerHTML = recs.map((r) =>
+        '<div class="rec-item">💡 ' + escapeHtml(r) + '</div>'
+      ).join("");
+    } else {
+      $("#profile-recommendations").innerHTML = '<div class="hint-inline">Поки немає рекомендацій</div>';
+    }
+
+    // кнопка підписки
+    const upBtn = $("#btn-upgrade");
+    if (upBtn) upBtn.addEventListener("click", openSubscribe);
+  }
+
+  async function openSubscribe() {
+    try {
+      const res = await API.subscribe();
+      if (!res.available) {
+        toast(res.message || "Оплата тимчасово недоступна");
+        return;
+      }
+      // відкриваємо сторінку оплати LiqPay
+      if (tg && tg.openLink) {
+        tg.openLink(res.checkout_url, { try_instant_view: true });
+      } else {
+        window.open(res.checkout_url, "_blank");
+      }
+      toast("Після оплати тариф оновиться автоматично");
+    } catch (e) {
+      toast("Не вдалося: " + e.message);
+    }
   }
 
   // ---------- Статистика ----------
@@ -233,6 +355,7 @@
       data = await API.stats();
     } catch (e) {
       $("#stats-by-mode").innerHTML = "";
+      $("#stats-premium").innerHTML = "";
       return;
     }
     $("#stat-today").textContent = human(data.today_seconds);
@@ -262,16 +385,149 @@
     if (!data.recent.length) {
       recent.innerHTML = '<div class="hint-inline">Історія порожня</div>';
     } else {
+      const catsMeta = CATEGORIES;
       data.recent.forEach((row) => {
         const meta = modesMeta[row.mode] || { label: row.mode };
+        const cat = catsMeta[row.category] || catsMeta.other;
         const d = document.createElement("div");
         d.className = "list-row";
         const ic = row.completed ? "✓" : "○";
         d.innerHTML =
           '<span>' + ic + " " + escapeHtml(meta.label) +
+          (cat ? ' <span class="cat-tag">' + cat.emoji + "</span>" : "") +
           '</span><span class="r-time">' + human(row.actual) + "</span>";
         recent.appendChild(d);
       });
+    }
+
+    // преміум-блок
+    renderPremiumBlock();
+  }
+
+  async function renderPremiumBlock() {
+    const root = $("#stats-premium");
+    root.innerHTML = "";
+
+    if (!state.isPremium && state.me) {
+      root.innerHTML = renderPaywall(state.premiumPriceUah);
+      const b = root.querySelector("#paywall-btn");
+      if (b) b.addEventListener("click", openSubscribe);
+      return;
+    }
+    if (!state.me) {
+      // ще не знаємо статус — пробуємо завантажити
+      try { await loadProfile(); } catch (e) {}
+    }
+
+    if (!state.isPremium) {
+      root.innerHTML = renderPaywall(state.premiumPriceUah);
+      const b = root.querySelector("#paywall-btn");
+      if (b) b.addEventListener("click", openSubscribe);
+      return;
+    }
+
+    // премиум активний — показуємо деталі
+    const wrap = document.createElement("div");
+    wrap.className = "premium-unlocked";
+    wrap.innerHTML =
+      '<h2 class="group-title">Детальна статистика ⭐</h2>' +
+      '<div class="premium-toolbar">' +
+        '<div class="seg-group" id="range-segs">' +
+          ["week", "month", "year", "all"].map((r) => {
+            const labels = { week: "Тиждень", month: "Місяць", year: "Рік", all: "Усе" };
+            return '<button class="seg-mini' + (state.premiumRange === r ? " active" : "") + '" data-range="' + r + '">' + labels[r] + '</button>';
+          }).join("") +
+        '</div>' +
+      '</div>' +
+      '<div id="premium-content"></div>';
+    root.appendChild(wrap);
+
+    wrap.querySelectorAll(".seg-mini").forEach((b) => {
+      b.addEventListener("click", () => {
+        state.premiumRange = b.dataset.range;
+        wrap.querySelectorAll(".seg-mini").forEach((x) => x.classList.toggle("active", x === b));
+        loadPremiumContent();
+      });
+    });
+
+    await loadPremiumContent();
+  }
+
+  function renderPaywall(price) {
+    const features = [
+      "📊 Статистика за категоріями діяльності",
+      "📈 Графіки прогресу за тиждень/місяць/рік",
+      "🔥 Серії (streaks) та щоденні цілі",
+      "🗂 Повна історія сесій (без обмеження)",
+      "🎵 Безлімітні завантаження треків",
+    ];
+    return (
+      '<div class="paywall">' +
+        '<div class="paywall-lock">🔒</div>' +
+        '<h3>Premium</h3>' +
+        '<p class="paywall-sub">Детальна статистика та розширені можливості</p>' +
+        '<ul class="paywall-list">' +
+          features.map((f) => '<li>' + f + '</li>').join("") +
+        '</ul>' +
+        '<button class="primary-btn" id="paywall-btn">Розблокувати — ' + price + '₴/міс</button>' +
+      '</div>'
+    );
+  }
+
+  async function loadPremiumContent() {
+    const el = $("#premium-content");
+    if (!el) return;
+    el.innerHTML = '<div class="hint-inline">Завантаження…</div>';
+    try {
+      const d = await API.statsPremium(state.premiumRange);
+      let html = '';
+
+      // серії
+      html += '<div class="streak-cards">';
+      html += '<div class="streak-card"><div class="stat-value">🔥 ' + d.current_streak + '</div><div class="stat-label">поточна серія</div></div>';
+      html += '<div class="streak-card"><div class="stat-value">🏆 ' + d.best_streak + '</div><div class="stat-label">рекорд</div></div>';
+      html += '<div class="streak-card"><div class="stat-value">' + human(d.total_seconds) + '</div><div class="stat-label">за період</div></div>';
+      html += '</div>';
+
+      // графік по днях
+      if (d.by_day && d.by_day.length) {
+        const maxSec = Math.max(...d.by_day.map((x) => x.s), 1);
+        html += '<h2 class="group-title">Активність по днях</h2><div class="chart">';
+        // показуємо останні ~14 барів (або всі якщо менше)
+        const days = d.by_day.slice(-14);
+        days.forEach((day) => {
+          const pct = Math.round((day.s / maxSec) * 100);
+          const dateLbl = day.d.slice(5).replace("-", "/");
+          html += '<div class="chart-col"><div class="chart-bar" style="height:' + Math.max(pct, 3) + '%"></div><span class="chart-lbl">' + dateLbl + '</span></div>';
+        });
+        html += '</div>';
+      }
+
+      // за категоріями
+      if (d.by_category && d.by_category.length) {
+        const total = d.by_category.reduce((a, x) => a + x.s, 0) || 1;
+        html += '<h2 class="group-title">За категоріями</h2><div class="list-group">';
+        d.by_category.forEach((row) => {
+          const meta = (d.categories && d.categories[row.category]) || { label: row.category, emoji: "", color: "#8e8e93" };
+          const pct = Math.round((row.s / total) * 100);
+          html += '<div class="list-row col">' +
+            '<span class="cat-row"><span class="cat-emoji">' + meta.emoji + '</span>' +
+            '<span class="cat-info"><span class="cat-name">' + escapeHtml(meta.label) + '</span>' +
+            '<span class="cat-bar"><span class="cat-fill" style="width:' + pct + '%;background:' + meta.color + '"></span></span></span></span>' +
+            '<span class="r-time">' + human(row.s) + ' · ' + pct + '%</span>' +
+          '</div>';
+        });
+        html += '</div>';
+      }
+
+      el.innerHTML = html || '<div class="hint-inline">Немає даних за цей період</div>';
+    } catch (e) {
+      if (e.status === 403) {
+        state.isPremium = false;
+        renderPremiumBlock();
+      } else {
+        el.innerHTML = '<div class="hint-inline">Не вдалося завантажити: ' + escapeHtml(e.message) + '</div>';
+      }
     }
   }
 
@@ -281,9 +537,10 @@
 
     async load() {
       try {
-        this.data = await API.tracks();
+        this.data = await API.tracks(state.musicCategory);
         state.isAdmin = !!this.data.is_admin;
         state.uploadEnabled = !!this.data.upload_enabled;
+        state.isPremium = !!this.data.is_premium;
         this.render();
         this.applyPermissions();
       } catch (e) {
@@ -302,29 +559,28 @@
       $("#tab-upload").classList.toggle("hidden", !state.uploadEnabled);
     },
 
-    allTracks() {
-      const demo = (this.data.demo || []).map((t) => ({ ...t, _group: "demo" }));
-      const saved = this.data.tracks || [];
-      return [
-        ...demo,
-        ...saved.filter((t) => t.scope === "admin").map((t) => ({ ...t, _group: "admin" })),
-        ...saved.filter((t) => t.scope === "user").map((t) => ({ ...t, _group: "user" })),
-      ];
-    },
-
     render() {
       const root = $("#track-list");
       root.innerHTML = "";
+
+      const all = [
+        ...(this.data.demo || []).map((t) => ({ ...t, _group: "demo" })),
+        ...(this.data.tracks || []).map((t) => ({ ...t, _group: t.scope })),
+      ];
+
+      // Закріплені → Бажане → за джерелом
+      const pinned = all.filter((t) => t.is_pinned);
+      const favorites = all.filter((t) => t.is_favorite && !t.is_pinned);
+      const demo = all.filter((t) => t._group === "demo" && !t.is_pinned && !t.is_favorite);
+      const admin = all.filter((t) => t._group === "admin" && !t.is_pinned && !t.is_favorite);
+      const user = all.filter((t) => t._group === "user" && !t.is_pinned && !t.is_favorite);
+
       const groups = [
-        { key: "demo", title: "Демо", items: (this.data.demo || []).map((t) => ({ ...t, _group: "demo" })) },
-        {
-          key: "admin", title: "Для всіх",
-          items: (this.data.tracks || []).filter((t) => t.scope === "admin").map((t) => ({ ...t, _group: "admin" })),
-        },
-        {
-          key: "user", title: "Мої треки",
-          items: (this.data.tracks || []).filter((t) => t.scope === "user").map((t) => ({ ...t, _group: "user" })),
-        },
+        { key: "pinned", title: "📌 Закріплені", items: pinned },
+        { key: "fav", title: "❤️ Бажане", items: favorites },
+        { key: "demo", title: "Демо", items: demo },
+        { key: "admin", title: "Для всіх", items: admin },
+        { key: "user", title: "Мої треки", items: user },
       ];
 
       let any = false;
@@ -343,7 +599,7 @@
       });
 
       if (!any) {
-        root.innerHTML = '<div class="hint-inline">Поки порожньо. Натисни «＋» на вкладці «Для всіх»… хоча, додаємо через кнопку нижче 🎵</div>';
+        root.innerHTML = '<div class="hint-inline">Поки порочньо. Натисни «＋», щоб додати трек 🎵</div>';
       }
 
       // плаваюча кнопка «додати»
@@ -363,6 +619,7 @@
       el.className = "track-item";
       el.dataset.id = t.id || "";
       el.dataset.group = t._group || "";
+      el.dataset.key = t.track_key || "";
 
       // червона кнопка-фон під свайп
       const delBg = document.createElement("div");
@@ -377,15 +634,23 @@
         ? '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M10 8l6 4-6 4z" fill="currentColor"/></svg>'
         : '<svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>';
       const playOverlay = '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
+      const catMeta = CATEGORIES[t.category] || CATEGORIES.other;
+      const favCls = t.is_favorite ? " active" : "";
+      const pinCls = t.is_pinned ? " active" : "";
       inner.innerHTML =
         '<div class="track-art ' + (isYt ? "yt" : "") + '">' +
         '<span class="art-icon">' + artIcon + '</span>' +
         '<span class="play-icon">' + playOverlay + '</span>' +
-        '</div><div class="track-meta"><div class="track-title">' +
-        escapeHtml(t.title || "Без назви") +
+        '</div><div class="track-meta"><div class="track-title-row">' +
+        '<span class="track-title">' + escapeHtml(t.title || "Без назви") + '</span>' +
+        '<span class="track-cat-badge" title="' + escapeHtml(catMeta.label) + '">' + catMeta.emoji + '</span>' +
         '</div><div class="track-author">' +
         escapeHtml(t.author || (isYt ? "YouTube" : "")) +
-        "</div></div>";
+        "</div></div>" +
+        '<div class="track-actions">' +
+          '<button class="track-act fav' + favCls + '" data-act="fav" title="Бажане">❤</button>' +
+          '<button class="track-act pin' + pinCls + '" data-act="pin" title="Закріпити">📌</button>' +
+        '</div>';
       el.appendChild(inner);
 
       // зберігаємо посилання на назву для inline-редагування
@@ -470,6 +735,14 @@
       let tapTimer = null;
       const artEl = el.querySelector(".track-art");
       el.addEventListener("click", (e) => {
+        // кнопки бажаного/закріпити
+        const actBtn = e.target.closest(".track-act");
+        if (actBtn) {
+          e.stopPropagation();
+          this.handleAction(actBtn.dataset.act, t, el);
+          return;
+        }
+
         if (currentX < -10) { closeSwipe(); opened = false; return; }
         if (el.querySelector(".track-title-input")) return;
 
@@ -505,6 +778,33 @@
           e.stopPropagation();
           this.deleteTrack(t, el);
         });
+      }
+    },
+
+    // ---------- Бажане / Закріпити ----------
+    async handleAction(act, t, el) {
+      const key = t.track_key || ("db:" + t.id);
+      try {
+        if (act === "fav") {
+          const res = await API.toggleFavorite(key);
+          t.is_favorite = res.is_favorite;
+          const btn = el.querySelector('.track-act.fav');
+          if (btn) btn.classList.toggle("active", res.is_favorite);
+          haptic("light");
+          // якщо зняли — прибираємо з групи бажаного
+          if (!res.is_favorite && (el.closest(".list-group") && el.closest(".list-group").previousElementSibling && el.closest(".list-group").previousElementSibling.textContent.includes("Бажане"))) {
+            this.load();
+          }
+        } else if (act === "pin") {
+          const res = await API.togglePin(key);
+          t.is_pinned = res.is_pinned;
+          const btn = el.querySelector('.track-act.pin');
+          if (btn) btn.classList.toggle("active", res.is_pinned);
+          haptic("light");
+          this.load(); // перегрупувати
+        }
+      } catch (e) {
+        toast("Не вдалося: " + e.message);
       }
     },
 
@@ -646,12 +946,28 @@
       $("#track-author").value = "";
       $("#file-name").textContent = "";
       $("#upload-status").classList.add("hidden");
+      state.addCategory = state.category; // підставляємо поточну категорію
+      state.uploadCategory = state.category;
+      renderAddChips();
       $("#add-modal").classList.remove("hidden");
     },
     close() {
       $("#add-modal").classList.add("hidden");
     },
   };
+
+  function onAddCategory(k) {
+    state.addCategory = k;
+    buildChips($("#add-category-chips"), k, onAddCategory);
+  }
+  function onUploadCategory(k) {
+    state.uploadCategory = k;
+    buildChips($("#upload-category-chips"), k, onUploadCategory);
+  }
+  function renderAddChips() {
+    buildChips($("#add-category-chips"), state.addCategory, onAddCategory);
+    buildChips($("#upload-category-chips"), state.uploadCategory, onUploadCategory);
+  }
 
   function setupModals() {
     // таби
@@ -682,7 +998,7 @@
       btn.disabled = true;
       btn.textContent = "Додаю…";
       try {
-        const res = await API.addTrackUrl({ url, title, author, scope });
+        const res = await API.addTrackUrl({ url, title, author, scope, category: state.addCategory });
         Modal.close();
         toast("Додано: " + (res.title || "трек"));
         await Music.load();
@@ -706,6 +1022,7 @@
       fd.append("title", title);
       fd.append("author", author);
       fd.append("scope", scope);
+      fd.append("category", state.uploadCategory);
 
       const status = $("#upload-status");
       const btn = $("#btn-upload");
@@ -724,6 +1041,28 @@
         status.textContent = "✕ " + e.message;
       } finally {
         btn.disabled = false;
+      }
+    });
+
+    // баг-репорт
+    $("#btn-bug-cancel").addEventListener("click", () => $("#bug-modal").classList.add("hidden"));
+    $("#btn-bug-send").addEventListener("click", async () => {
+      const msg = $("#bug-message").value.trim();
+      if (!msg) { toast("Опиши проблему"); return; }
+      const btn = $("#btn-bug-send");
+      btn.disabled = true;
+      btn.textContent = "Надсилаю…";
+      try {
+        await API.reportBug(msg, platformInfo(), state.screen);
+        $("#bug-modal").classList.add("hidden");
+        $("#bug-message").value = "";
+        toast("Дякуємо! Звіт надіслано");
+        haptic("success");
+      } catch (e) {
+        toast("Не вдалося: " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Надіслати";
       }
     });
 
@@ -746,6 +1085,35 @@
     $("#time-display").addEventListener("click", () => {
       if (!state.running) openTimePicker();
     });
+
+    // кнопка "повідомити про баг"
+    $("#btn-report-bug").addEventListener("click", () => {
+      $("#bug-modal").classList.remove("hidden");
+      $("#bug-message").focus();
+    });
+    // підтримка — посилання на адміна
+    $("#btn-support").addEventListener("click", () => {
+      const url = "https://t.me/focuson_on_bot";
+      if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
+      else window.open(url, "_blank");
+    });
+
+    // чіпи категорій на таймері
+    function onTimerCategory(k) {
+      if (state.running) { toast("Зупини таймер, щоб змінити категорію"); return; }
+      state.category = k;
+      buildChips($("#timer-category-chips"), k, onTimerCategory);
+      haptic("light");
+    }
+    buildChips($("#timer-category-chips"), state.category, onTimerCategory);
+
+    // чіпи фільтру музики
+    function onMusicCategory(k) {
+      state.musicCategory = k;
+      buildChips($("#music-category-chips"), k, onMusicCategory, true);
+      Music.load();
+    }
+    buildChips($("#music-category-chips"), state.musicCategory, onMusicCategory, true);
   }
 
   // ---------- Тайм-пікер ----------

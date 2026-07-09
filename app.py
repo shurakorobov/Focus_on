@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+import httpx
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -79,6 +80,59 @@ def current_user(request: Request) -> dict:
     return user
 
 
+def _ensure_user_exists(user: dict) -> None:
+    db.upsert_user(
+        tg_id=user["id"],
+        first_name=user.get("first_name", ""),
+        last_name=user.get("last_name", ""),
+        username=user.get("username", ""),
+        photo_url=user.get("photo_url", ""),
+    )
+
+
+def _client_ip(request: Request) -> str:
+    """Реальний IP клієнта (Render шле X-Forwarded-For)."""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
+async def _lookup_region(ip: str) -> str:
+    """Гео-інфо про IP через ip-api.com (без ключа)."""
+    if not ip or ip.startswith(("127.", "10.", "192.168.", "172.")):
+        return "локальна мережа"
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.get(f"http://ip-api.com/json/{ip}?fields=country,regionName,city,isp,query&lang=uk")
+            d = r.json()
+            parts = [d.get("country"), d.get("regionName"), d.get("city")]
+            loc = ", ".join(p for p in parts if p)
+            isp = d.get("isp", "")
+            return f"{loc} · {isp}" if isp else loc
+    except Exception:
+        return "невідомо"
+
+
+async def _notify_admin(message: str) -> None:
+    """Шле повідомлення адміну через Bot API (якщо задано токен і chat_id)."""
+    if not settings.BOT_TOKEN or not settings.ADMIN_CHAT_ID:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": settings.ADMIN_CHAT_ID,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+            )
+    except Exception:
+        pass
+
+
 # ------------------------------ схеми ---------------------------------------
 
 
@@ -93,17 +147,34 @@ class FinishSession(BaseModel):
     actual: int = Field(..., ge=0)
     completed: bool = False
     started_at: str
+    category: str = Field("other", pattern="^(deep_work|creative|learning|reading|training|other)$")
 
 
 class AddTrackByURL(BaseModel):
     url: str = Field(..., min_length=3)
     title: str = ""
     author: str = ""
-    scope: str = Field("user", pattern="^(admin|user)$")  # admin лише перевіряється окремо
+    scope: str = Field("user", pattern="^(admin|user)$")
+    category: str = Field("other", pattern="^(deep_work|creative|learning|reading|training|other)$")
 
 
 class RenameTrack(BaseModel):
     title: str = Field(..., min_length=0, max_length=200)
+
+
+class TrackKeyReq(BaseModel):
+    track_key: str = Field(..., min_length=1)
+
+
+class BugReport(BaseModel):
+    message: str = Field(..., max_length=4000)
+    platform: str = ""
+    screen: str = ""
+
+
+class GrantPremium(BaseModel):
+    tg_id: int
+    days: int = Field(settings.PREMIUM_DURATION_DAYS, gt=0, le=3650)
 
 
 # ------------------------------ API -----------------------------------------
@@ -114,19 +185,46 @@ async def health():
     return {"status": "ok", "configured": settings.is_configured}
 
 
+@app.get("/api/categories")
+async def api_categories():
+    """Перелік категорій діяльності."""
+    return {"categories": db.CATEGORIES, "modes": db.FOCUS_MODES}
+
+
 @app.get("/api/me")
 async def api_me(user: dict = Depends(current_user)):
-    """Повертає профіль користувача (автоматично створюється при першому запиті)."""
-    tg_id = user["id"]
-    db.upsert_user(
-        tg_id=tg_id,
-        first_name=user.get("first_name", ""),
-        last_name=user.get("last_name", ""),
-        username=user.get("username", ""),
-        photo_url=user.get("photo_url", ""),
-    )
-    profile = db.get_user(tg_id) or {}
-    return {"user": user, "profile": profile}
+    """Повертає профіль користувача + тариф."""
+    _ensure_user_exists(user)
+    profile = db.get_user(user["id"]) or {}
+    plan = db.get_user_plan(user["id"])
+    recommendations = _recommendations(profile, plan)
+    return {
+        "user": user,
+        "profile": profile,
+        "plan": plan["plan"],
+        "is_premium": plan["is_premium"],
+        "plan_expires_at": plan["plan_expires_at"],
+        "recommendations": recommendations,
+        "is_admin": settings.is_admin(user["id"]),
+        "premium_price_uah": settings.PREMIUM_PRICE_UAH,
+    }
+
+
+def _recommendations(profile: dict, plan: dict) -> list[str]:
+    """Прості рекомендації на основі активності."""
+    recs = []
+    total = profile.get("total_focus_seconds", 0) or 0
+    if total == 0:
+        recs.append("Почни з короткої сесії на 15 хвилин — так легше ввійти в ритм.")
+        recs.append("Обери категорію «Над чим працюємо?» перед стартом таймера.")
+    else:
+        hours = total / 3600
+        if hours < 5:
+            recs.append("Спробуй режим Deep Work (50 хв) для глибокої концентрації.")
+        if not plan.get("is_premium"):
+            recs.append("Преміум відкриває статистику за категоріями та графіки прогресу.")
+        recs.append("Закріпи улюблений трек, щоб він завжди був під рукою.")
+    return recs
 
 
 @app.get("/api/modes")
@@ -137,7 +235,23 @@ async def api_modes():
 
 @app.get("/api/stats")
 async def api_stats(user: dict = Depends(current_user)):
+    """Базова (безкоштовна) статистика."""
     return db.get_stats(user["id"])
+
+
+@app.get("/api/stats/premium")
+async def api_stats_premium(
+    request: Request,
+    range: str = "month",
+    category: str | None = None,
+    user: dict = Depends(current_user),
+):
+    """Преміум-статистика: за категоріями, по днях, серії."""
+    if range not in ("week", "month", "year", "all"):
+        range = "month"
+    if not db.is_premium(user["id"]):
+        raise HTTPException(status_code=403, detail="premium only")
+    return db.get_stats_premium(user["id"], range_key=range, category=category)
 
 
 @app.post("/api/session/finish")
@@ -147,13 +261,7 @@ async def api_finish_session(
     """Зберігає результат сесії фокусу."""
     if payload.mode not in db.FOCUS_MODES:
         raise HTTPException(status_code=400, detail="unknown mode")
-    db.upsert_user(
-        tg_id=user["id"],
-        first_name=user.get("first_name", ""),
-        last_name=user.get("last_name", ""),
-        username=user.get("username", ""),
-        photo_url=user.get("photo_url", ""),
-    )
+    _ensure_user_exists(user)
     db.save_session(
         tg_id=user["id"],
         mode=payload.mode,
@@ -161,6 +269,7 @@ async def api_finish_session(
         actual=payload.actual,
         completed=payload.completed,
         started_at=payload.started_at,
+        category=payload.category,
     )
     stats = db.get_stats(user["id"])
     return {"ok": True, "stats": stats}
@@ -169,32 +278,36 @@ async def api_finish_session(
 # ------------------------------ музика --------------------------------------
 
 
-def _ensure_user_exists(user: dict) -> None:
-    db.upsert_user(
-        tg_id=user["id"],
-        first_name=user.get("first_name", ""),
-        last_name=user.get("last_name", ""),
-        username=user.get("username", ""),
-        photo_url=user.get("photo_url", ""),
-    )
-
-
 @app.get("/api/tracks")
-async def api_list_tracks(user: dict = Depends(current_user)):
-    """Усі треки користувача: демо + адмінські + особисті."""
+async def api_list_tracks(
+    category: str | None = None,
+    user: dict = Depends(current_user),
+):
+    """Усі треки користувача: демо + адмінські + особисті (з фільтром за категорією)."""
     _ensure_user_exists(user)
     demo = storage.list_demo_tracks(settings.WEBAPP_URL)
-    saved = db.list_tracks(user["id"])
+    saved = db.list_tracks(user["id"], category=category)
     # youtube-треки отримують embed-URL для iframe
     for t in saved:
         if t["kind"] == "youtube":
             t["embed_url"] = storage.youtube_embed_url(t["url"])
+    # додаємо track_key/метадані до демо-треків теж
+    fav_keys = set(db.list_favorites(user["id"]))
+    pin_keys = set(db.list_pinned(user["id"]))
+    for d in demo:
+        d["track_key"] = db.track_key(d)
+        d["is_favorite"] = d["track_key"] in fav_keys
+        d["is_pinned"] = d["track_key"] in pin_keys
     is_admin = settings.is_admin(user["id"])
+    upload_count = db.get_upload_count(user["id"])
     return {
         "demo": demo,
         "tracks": saved,
         "is_admin": is_admin,
         "upload_enabled": settings.supabase_enabled,
+        "upload_count": upload_count,
+        "upload_limit": settings.FREE_UPLOAD_LIMIT,
+        "is_premium": db.is_premium(user["id"]),
     }
 
 
@@ -205,9 +318,16 @@ async def api_add_track_url(
     """Додає трек за прямим посиланням або YouTube."""
     _ensure_user_exists(user)
     scope = payload.scope
-    # адмін-трек може додати лише адмін
     if scope == "admin" and not settings.is_admin(user["id"]):
         raise HTTPException(status_code=403, detail="admin only")
+    # ліміт для безкоштовних
+    if scope == "user" and not db.is_premium(user["id"]):
+        used = db.get_upload_count(user["id"])
+        if used >= settings.FREE_UPLOAD_LIMIT:
+            raise HTTPException(
+                status_code=402,
+                detail=f"Ліміт безкоштовних треків ({settings.FREE_UPLOAD_LIMIT}). Преміум знімає обмеження.",
+            )
 
     kind = storage.classify_url(payload.url)
     title = payload.title
@@ -229,6 +349,7 @@ async def api_add_track_url(
         url=payload.url,
         title=title or "Без назви",
         author=author or "",
+        category=payload.category,
     )
     return {"ok": True, "id": tid, "kind": kind, "title": title or "Без назви"}
 
@@ -237,18 +358,25 @@ async def api_add_track_url(
 async def api_upload_track(
     request: Request,
     file: UploadFile = File(...),
-    title: str = "",
-    author: str = "",
-    scope: str = "user",
+    title: str = Form(""),
+    author: str = Form(""),
+    scope: str = Form("user"),
+    category: str = Form("other"),
     user: dict = Depends(current_user),
 ):
-    """Завантажує файл музики у Supabase Storage (адмін або особистий).
-
-    Доступ: адмін — для scope=admin; будь-хто — для scope=user.
-    """
+    """Завантажує файл музики у Supabase Storage."""
     _ensure_user_exists(user)
     if scope == "admin" and not settings.is_admin(user["id"]):
         raise HTTPException(status_code=403, detail="admin only")
+    if scope == "user" and not db.is_premium(user["id"]):
+        used = db.get_upload_count(user["id"])
+        if used >= settings.FREE_UPLOAD_LIMIT:
+            raise HTTPException(
+                status_code=402,
+                detail=f"Ліміт безкоштовних треків ({settings.FREE_UPLOAD_LIMIT}).",
+            )
+    if category not in db.CATEGORIES:
+        category = "other"
     if not settings.supabase_enabled:
         raise HTTPException(
             status_code=400,
@@ -256,11 +384,9 @@ async def api_upload_track(
         )
 
     data = await file.read()
-    # обмеження ~25 МБ
     if len(data) > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Файл задовгий (макс 25 МБ)")
 
-    # безпечне ім'я файлу
     import time
 
     suffix = Path(file.filename or "track.mp3").suffix.lower()[:6] or ".mp3"
@@ -281,6 +407,7 @@ async def api_upload_track(
         url=url,
         title=title or (file.filename or "Без назви"),
         author=author,
+        category=category,
     )
     return {"ok": True, "id": tid, "url": url}
 
@@ -309,6 +436,150 @@ async def api_rename_track(
     if not ok:
         raise HTTPException(status_code=404, detail="не знайдено або немає доступу")
     return {"ok": True}
+
+
+@app.post("/api/tracks/favorite")
+async def api_toggle_favorite(
+    payload: TrackKeyReq, user: dict = Depends(current_user)
+):
+    """Перемикає «бажане» для треку."""
+    _ensure_user_exists(user)
+    state = db.toggle_favorite(user["id"], payload.track_key)
+    return {"ok": True, "is_favorite": state}
+
+
+@app.post("/api/tracks/pin")
+async def api_toggle_pin(
+    payload: TrackKeyReq, user: dict = Depends(current_user)
+):
+    """Перемикає «закріпити» для треку."""
+    _ensure_user_exists(user)
+    state = db.toggle_pin(user["id"], payload.track_key)
+    return {"ok": True, "is_pinned": state}
+
+
+# ------------------------------ підписка / оплата ----------------------------
+
+
+@app.post("/api/subscribe")
+async def api_subscribe(user: dict = Depends(current_user)):
+    """Генерує LiqPay checkout для преміум-підписки."""
+    _ensure_user_exists(user)
+    if not settings.liqpay_enabled:
+        return {
+            "available": False,
+            "message": "Онлайн-оплата налаштовується. Преміум можна активувати вручну — зверніться до адміністратора.",
+            "price_uah": settings.PREMIUM_PRICE_UAH,
+        }
+    import time
+
+    from liqpay import build_checkout_url
+
+    order_id = f"focus-{user['id']}-{int(time.time())}"
+    server_url = f"{settings.WEBAPP_URL}/api/payments/liqpay-webhook"
+    result_url = settings.WEBAPP_URL
+    checkout_url = build_checkout_url(
+        public_key=settings.LIQPAY_PUBLIC_KEY,
+        private_key=settings.LIQPAY_PRIVATE_KEY,
+        amount_uah=settings.PREMIUM_PRICE_UAH,
+        order_id=order_id,
+        description=f"Focus OS Premium — {settings.PREMIUM_DURATION_DAYS} днів",
+        server_url=server_url,
+        result_url=result_url,
+    )
+    return {
+        "available": True,
+        "checkout_url": checkout_url,
+        "order_id": order_id,
+        "price_uah": settings.PREMIUM_PRICE_UAH,
+        "duration_days": settings.PREMIUM_DURATION_DAYS,
+    }
+
+
+@app.post("/api/payments/liqpay-webhook")
+async def api_liqpay_webhook(request: Request):
+    """Вебхук від LiqPay (без auth — перевіряється підписом)."""
+    if not settings.liqpay_enabled:
+        return JSONResponse({"status": "ignored"}, status_code=200)
+    from liqpay import verify_webhook, is_payment_success
+
+    form = await request.form()
+    data_b64 = form.get("data", "")
+    signature = form.get("signature", "")
+    payload = verify_webhook(settings.LIQPAY_PRIVATE_KEY, data_b64, signature)
+    if not payload:
+        return JSONResponse({"status": "bad signature"}, status_code=400)
+
+    order_id = str(payload.get("order_id", ""))
+    amount = float(payload.get("amount", 0) or 0)
+    status = str(payload.get("status", ""))
+    tg_id = _parse_tg_id_from_order(order_id)
+
+    db.record_payment(tg_id, order_id, amount, status, raw=str(payload))
+    if is_payment_success(payload) and tg_id:
+        db.set_user_plan(tg_id, "premium", days=settings.PREMIUM_DURATION_DAYS)
+        await _notify_admin(f"💳 <b>Преміум активовано</b>\nКористувач: <code>{tg_id}</code>\nСума: {amount} UAH\nЗамовлення: {order_id}")
+    return JSONResponse({"status": "ok"}, status_code=200)
+
+
+def _parse_tg_id_from_order(order_id: str) -> int:
+    """order_id має формат 'focus-<tg_id>-<ts>'."""
+    try:
+        parts = order_id.split("-")
+        return int(parts[1])
+    except Exception:
+        return 0
+
+
+@app.post("/api/admin/grant-premium")
+async def api_grant_premium(
+    payload: GrantPremium, user: dict = Depends(current_user)
+):
+    """Ручне вмикання преміуму (тільки адмін). Fallback, коли LiqPay не налаштований."""
+    if not settings.is_admin(user["id"]):
+        raise HTTPException(status_code=403, detail="admin only")
+    expires = db.set_user_plan(payload.tg_id, "premium", days=payload.days)
+    return {"ok": True, "tg_id": payload.tg_id, "plan": "premium", "plan_expires_at": expires}
+
+
+# ------------------------------ баг-репорти ---------------------------------
+
+
+@app.post("/api/bug-report")
+async def api_bug_report(
+    payload: BugReport, request: Request, user: dict = Depends(current_user)
+):
+    """Зберігає звіт про баг і шле повідомлення адміну з мережевою інформацією."""
+    _ensure_user_exists(user)
+    ip = _client_ip(request)
+    ua = request.headers.get("user-agent", "")
+    region = await _lookup_region(ip)
+
+    report_id = db.save_bug_report(
+        tg_id=user["id"],
+        message=payload.message,
+        user_agent=ua,
+        ip=ip,
+        region=region,
+        platform=payload.platform,
+        screen=payload.screen,
+    )
+
+    name = (user.get("first_name", "") + " " + user.get("last_name", "")).strip() or user.get("username", "")
+    uname = f"@{user['username']}" if user.get("username") else "—"
+    msg = (
+        f"🐞 <b>Новий баг-репорт</b> #{report_id}\n\n"
+        f"<b>Від:</b> {name} (<code>{user['id']}</code>)\n"
+        f"<b>Username:</b> {uname}\n\n"
+        f"<b>Текст:</b>\n{payload.message}\n\n"
+        f"<b>Платформа:</b> {payload.platform or '—'}\n"
+        f"<b>Екран:</b> {payload.screen or '—'}\n"
+        f"<b>IP:</b> <code>{ip}</code>\n"
+        f"<b>Регіон:</b> {region}\n"
+        f"<b>UA:</b> <code>{ua[:120]}</code>"
+    )
+    await _notify_admin(msg)
+    return {"ok": True, "id": report_id}
 
 
 # ------------------------------ Mini App сторінка ---------------------------

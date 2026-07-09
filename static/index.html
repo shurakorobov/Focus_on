@@ -46,6 +46,12 @@
         <span class="mode-dur">5 хв</span>
       </button>
     </div>
+
+    <!-- Над чим працюємо? -->
+    <div class="category-block">
+      <div class="category-label">Над чим працюємо?</div>
+      <div class="chips" id="timer-category-chips"></div>
+    </div>
   </section>
 
   <!-- ===== Екран: Статистика ===== -->
@@ -71,12 +77,46 @@
 
       <h2 class="group-title">Нещодавні сесії</h2>
       <div id="stats-recent" class="list-group"></div>
+
+      <!-- Преміум-блок (замок) -->
+      <div id="stats-premium" class="premium-block"></div>
     </div>
   </section>
 
   <!-- ===== Екран: Музика ===== -->
   <section id="screen-music" class="screen">
+    <div class="music-filter">
+      <div class="chips" id="music-category-chips"></div>
+    </div>
     <div class="music-scroll" id="track-list"></div>
+  </section>
+
+  <!-- ===== Екран: Профіль ===== -->
+  <section id="screen-profile" class="screen">
+    <div class="profile-scroll">
+      <div class="profile-card" id="profile-head"></div>
+
+      <h2 class="group-title">Тариф</h2>
+      <div class="profile-card" id="profile-plan"></div>
+
+      <h2 class="group-title">Рекомендації</h2>
+      <div class="profile-card" id="profile-recommendations"></div>
+
+      <div class="action-list">
+        <button class="action-row" id="btn-report-bug">
+          <span class="action-ico">🐞</span>
+          <span class="action-text">Повідомити про баг</span>
+          <span class="action-chev">›</span>
+        </button>
+        <button class="action-row" id="btn-support">
+          <span class="action-ico">💬</span>
+          <span class="action-text">Підтримка</span>
+          <span class="action-chev">›</span>
+        </button>
+      </div>
+
+      <div class="profile-footer">Focus OS · версія 2.0</div>
+    </div>
   </section>
 
   <!-- ===== Плаваюча кнопка дії (Старт/Пауза) ===== -->
@@ -97,6 +137,10 @@
     <button class="tab" data-screen="music">
       <svg viewBox="0 0 24 24" width="24" height="24"><path d="M9 18V5l10-2v13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="7" cy="18" r="2.5" fill="currentColor"/><circle cx="17" cy="16" r="2.5" fill="currentColor"/></svg>
       <span>Музика</span>
+    </button>
+    <button class="tab" data-screen="profile">
+      <svg viewBox="0 0 24 24" width="24" height="24"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>Профіль</span>
     </button>
   </nav>
 
@@ -122,6 +166,10 @@
         <input type="text" id="track-url" placeholder="https://... або YouTube" autocomplete="off" />
         <input type="text" id="track-title" placeholder="Назва (заповниться автоматично)" autocomplete="off" />
         <input type="text" id="track-author" placeholder="Виконавець" autocomplete="off" />
+        <div class="category-select">
+          <span class="cs-label">Категорія</span>
+          <div class="chips chips-tight" id="add-category-chips"></div>
+        </div>
         <div class="scope-row" id="scope-row">
           <label class="seg-choice"><input type="radio" name="scope" value="user" checked /><span>Для мене</span></label>
           <label class="seg-choice" id="scope-admin-label"><input type="radio" name="scope" value="admin" /><span>Для всіх</span></label>
@@ -136,6 +184,10 @@
         <span class="file-name" id="file-name"></span>
         <input type="text" id="upload-title" placeholder="Назва" autocomplete="off" />
         <input type="text" id="upload-author" placeholder="Виконавець" autocomplete="off" />
+        <div class="category-select">
+          <span class="cs-label">Категорія</span>
+          <div class="chips chips-tight" id="upload-category-chips"></div>
+        </div>
         <div class="scope-row">
           <label class="seg-choice"><input type="radio" name="scope2" value="user" checked /><span>Для мене</span></label>
           <label class="seg-choice" id="scope-admin-label2"><input type="radio" name="scope2" value="admin" /><span>Для всіх</span></label>
@@ -184,6 +236,20 @@
         <button class="preset-btn" data-sec="1500">25 хв</button>
         <button class="preset-btn" data-sec="3000">50 хв</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ===== Модал: баг-репорт ===== -->
+  <div class="modal hidden" id="bug-modal">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-row">
+        <button class="sheet-btn ghost" id="btn-bug-cancel">Скасувати</button>
+        <h3>Повідомити про баг</h3>
+        <button class="sheet-btn accent" id="btn-bug-send">Надіслати</button>
+      </div>
+      <p class="hint">Опиши, що сталося. Ми автоматично додамо відомості про твою мережу та пристрій.</p>
+      <textarea id="bug-message" class="bug-textarea" rows="5" placeholder="Що не спрацювало? На якому екрані? Що робив перед цим?" maxlength="4000"></textarea>
     </div>
   </div>
 

@@ -57,12 +57,20 @@ const API = (() => {
     health: () => request("GET", "/api/health"),
     me: () => request("GET", "/api/me"),
     modes: () => request("GET", "/api/modes"),
+    categories: () => request("GET", "/api/categories"),
     stats: () => request("GET", "/api/stats"),
+    statsPremium: (range = "month", category = "") =>
+      request("GET", "/api/stats/premium", {
+        params: { range, ...(category ? { category } : {}) },
+      }),
     finishSession: (payload) =>
       request("POST", "/api/session/finish", { json: payload }),
 
     // музика
-    tracks: () => request("GET", "/api/tracks"),
+    tracks: (category) =>
+      request("GET", "/api/tracks", {
+        params: category && category !== "all" ? { category } : {},
+      }),
     addTrackUrl: (payload) =>
       request("POST", "/api/tracks/url", { json: payload }),
     uploadTrack: (formData) =>
@@ -70,6 +78,19 @@ const API = (() => {
     deleteTrack: (id) => request("DELETE", "/api/tracks/" + id),
     renameTrack: (id, title) =>
       request("PATCH", "/api/tracks/" + id, { json: { title } }),
+    toggleFavorite: (track_key) =>
+      request("POST", "/api/tracks/favorite", { json: { track_key } }),
+    togglePin: (track_key) =>
+      request("POST", "/api/tracks/pin", { json: { track_key } }),
+
+    // підписка
+    subscribe: () => request("POST", "/api/subscribe"),
+    grantPremium: (tg_id, days) =>
+      request("POST", "/api/admin/grant-premium", { json: { tg_id, days } }),
+
+    // баг-репорт
+    reportBug: (message, platform = "", screen = "") =>
+      request("POST", "/api/bug-report", { json: { message, platform, screen } }),
 
     // для діагностики
     getInitData,
