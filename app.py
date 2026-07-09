@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
@@ -20,7 +21,19 @@ from telegram_auth import authenticate
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title="Focus OS API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Життєвий цикл: запускаємо фонові задачі при старті."""
+    import asyncio
+    from keepalive import keepalive_loop
+
+    task = asyncio.create_task(keepalive_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Focus OS API", lifespan=lifespan)
 
 # Ініціалізуємо БД при старті
 db.init_db()
