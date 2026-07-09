@@ -35,11 +35,9 @@ class Settings:
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     SUPABASE_BUCKET: str = os.getenv("SUPABASE_BUCKET", "tracks")
 
-    # LiqPay — оплата преміум-підписки карткою.
-    # Якщо ключі порожні — оплата недоступна, премиум вмикається вручну (admin).
-    LIQPAY_PUBLIC_KEY: str = os.getenv("LIQPAY_PUBLIC_KEY", "").strip()
-    LIQPAY_PRIVATE_KEY: str = os.getenv("LIQPAY_PRIVATE_KEY", "").strip()
-    PREMIUM_PRICE_UAH: int = int(os.getenv("PREMIUM_PRICE_UAH", "100"))
+    # Telegram Stars — нативна валюта Telegram для платежів.
+    # PREMIUM_PRICE_STARS — ціна місячної підписки в Stars (1 Star ≈ $0.013).
+    PREMIUM_PRICE_STARS: int = int(os.getenv("PREMIUM_PRICE_STARS", "100"))
     PREMIUM_DURATION_DAYS: int = int(os.getenv("PREMIUM_DURATION_DAYS", "30"))
     # Ліміт завантажень треків для безкоштовних користувачів.
     FREE_UPLOAD_LIMIT: int = int(os.getenv("FREE_UPLOAD_LIMIT", "5"))
@@ -63,8 +61,9 @@ class Settings:
         return bool(self.SUPABASE_URL) and bool(self.SUPABASE_KEY)
 
     @property
-    def liqpay_enabled(self) -> bool:
-        return bool(self.LIQPAY_PUBLIC_KEY) and bool(self.LIQPAY_PRIVATE_KEY)
+    def stars_enabled(self) -> bool:
+        """Telegram Stars доступні, коли є BOT_TOKEN (бо це нативні платежі TG)."""
+        return bool(self.BOT_TOKEN)
 
     def is_admin(self, tg_id: int) -> bool:
         return tg_id in self.ADMIN_IDS

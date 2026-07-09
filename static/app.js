@@ -50,7 +50,7 @@
     uploadCategory: "other",   // категорія в модалці додавання (файл)
     isPremium: false,
     planExpiresAt: "",
-    premiumPriceUah: 100,
+    premiumPriceStars: 100,
     premiumRange: "month",     // діапазон на преміум-статистиці
     me: null,                  // кеш /api/me
   };
@@ -298,7 +298,7 @@
       state.isPremium = !!data.is_premium;
       state.isAdmin = !!data.is_admin;
       state.planExpiresAt = data.plan_expires_at || "";
-      state.premiumPriceUah = data.premium_price_uah || 100;
+      state.premiumPriceStars = data.premium_price_stars || 100;
       renderProfile(data);
       // адмін-дашборд
       if (data.is_admin) {
@@ -413,7 +413,7 @@
     } else {
       plan = '<div class="plan-badge free">Безкоштовний</div>';
       plan += '<div class="plan-exp">Преміум відкриває деталізовану статистику, графіки та безліміт треків</div>';
-      plan += '<button class="primary-btn" id="btn-upgrade">Розблокувати — ' + state.premiumPriceUah + '₴/міс</button>';
+      plan += '<button class="primary-btn" id="btn-upgrade">Розблокувати — ' + state.premiumPriceStars + '⭐/міс</button>';
     }
     $("#profile-plan").innerHTML = plan;
 
@@ -524,13 +524,23 @@
         toast(res.message || "Оплата тимчасово недоступна");
         return;
       }
-      // відкриваємо сторінку оплати LiqPay
-      if (tg && tg.openLink) {
-        tg.openLink(res.checkout_url, { try_instant_view: true });
+      // відкриваємо нативний інвойс Telegram Stars
+      if (tg && tg.openInvoice) {
+        tg.openInvoice(res.invoice_link, (status) => {
+          if (status === "paid") {
+            toast("⭐ Преміум активовано!");
+            haptic("success");
+            loadProfile(); // оновити тариф одразу
+          } else if (status === "cancelled") {
+            toast("Оплату скасовано");
+          } else if (status === "failed") {
+            toast("Оплата не вдалась");
+          }
+          // pending — нічого не робимо
+        });
       } else {
-        window.open(res.checkout_url, "_blank");
+        toast("Оплата доступна лише в застосунку Telegram");
       }
-      toast("Після оплати тариф оновиться автоматично");
     } catch (e) {
       toast("Не вдалося: " + e.message);
     }
@@ -598,7 +608,7 @@
     root.innerHTML = "";
 
     if (!state.isPremium && state.me) {
-      root.innerHTML = renderPaywall(state.premiumPriceUah);
+      root.innerHTML = renderPaywall(state.premiumPriceStars);
       const b = root.querySelector("#paywall-btn");
       if (b) b.addEventListener("click", openSubscribe);
       return;
@@ -609,7 +619,7 @@
     }
 
     if (!state.isPremium) {
-      root.innerHTML = renderPaywall(state.premiumPriceUah);
+      root.innerHTML = renderPaywall(state.premiumPriceStars);
       const b = root.querySelector("#paywall-btn");
       if (b) b.addEventListener("click", openSubscribe);
       return;
@@ -658,7 +668,7 @@
         '<ul class="paywall-list">' +
           features.map((f) => '<li>' + f + '</li>').join("") +
         '</ul>' +
-        '<button class="primary-btn" id="paywall-btn">Розблокувати — ' + price + '₴/міс</button>' +
+        '<button class="primary-btn" id="paywall-btn">Розблокувати — ' + price + '⭐/міс</button>' +
       '</div>'
     );
   }

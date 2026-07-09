@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
+import time
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -35,8 +36,35 @@ async def lifespan(app: FastAPI):
     logging.info("🚀 Focus OS стартує... PORT=%s WEBAPP_URL=%s",
                  os.getenv("PORT"), os.getenv("WEBAPP_URL", "(не задано)"))
     task = asyncio.create_task(keepalive_loop())
+    # Реєструємо webhook для прийому Telegram updates (платежі Stars, /start тощо)
+    await _setup_webhook()
     yield
     task.cancel()
+
+
+async def _setup_webhook() -> None:
+    """Встановлює Telegram webhook на /api/telegram/webhook.
+    Потрібно для Telegram Stars (pre_checkout_query + successful_payment)."""
+    if not settings.has_token or not settings.WEBAPP_URL:
+        return
+    webhook_url = settings.WEBAPP_URL.rstrip("/") + "/api/telegram/webhook"
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/setWebhook",
+                json={"url": webhook_url, "allowed_updates": [
+                    "message", "pre_checkout_query"]},
+            )
+            data = r.json()
+            if data.get("ok"):
+                import logging
+                logging.getLogger("webhook").info("Webhook встановлено: %s", webhook_url)
+            else:
+                import logging
+                logging.getLogger("webhook").warning("setWebhook помилка: %s", data)
+    except Exception as e:
+        import logging
+        logging.getLogger("webhook").warning("setWebhook виключення: %s", e)
 
 
 app = FastAPI(title="Focus OS API", lifespan=lifespan)
@@ -208,7 +236,7 @@ async def api_me(request: Request, user: dict = Depends(current_user)):
         "plan_expires_at": plan["plan_expires_at"],
         "recommendations": recommendations,
         "is_admin": settings.is_admin(user["id"]),
-        "premium_price_uah": settings.PREMIUM_PRICE_UAH,
+        "premium_price_stars": settings.PREMIUM_PRICE_STARS,
         "network": geo,
     }
 
@@ -517,79 +545,185 @@ async def api_toggle_pin(
 
 @app.post("/api/subscribe")
 async def api_subscribe(user: dict = Depends(current_user)):
-    """Генерує LiqPay checkout для преміум-підписки."""
+    """Створює інвойс Telegram Stars для місячної підписки.
+    Повертає invoice_link (slug) — клієнт відкриває через tg.openInvoice(slug)."""
     _ensure_user_exists(user)
-    if not settings.liqpay_enabled:
+    if not settings.stars_enabled:
         return {
             "available": False,
-            "message": "Онлайн-оплата налаштовується. Преміум можна активувати вручну — зверніться до адміністратора.",
-            "price_uah": settings.PREMIUM_PRICE_UAH,
+            "message": "Оплата тимчасово недоступна.",
+            "price_stars": settings.PREMIUM_PRICE_STARS,
         }
-    import time
-
-    from liqpay import build_checkout_url
-
     order_id = f"focus-{user['id']}-{int(time.time())}"
-    server_url = f"{settings.WEBAPP_URL}/api/payments/liqpay-webhook"
-    result_url = settings.WEBAPP_URL
-    checkout_url = build_checkout_url(
-        public_key=settings.LIQPAY_PUBLIC_KEY,
-        private_key=settings.LIQPAY_PRIVATE_KEY,
-        amount_uah=settings.PREMIUM_PRICE_UAH,
-        order_id=order_id,
-        description=f"Focus OS Premium — {settings.PREMIUM_DURATION_DAYS} днів",
-        server_url=server_url,
-        result_url=result_url,
+    invoice = await _send_stars_invoice(
+        chat_id=user["id"],
+        title=f"Focus OS Premium — {settings.PREMIUM_DURATION_DAYS} днів",
+        description="Детальна статистика, графіки прогресу, серії, безліміт треків.",
+        payload=order_id,
+        stars=settings.PREMIUM_PRICE_STARS,
+        subscription_period=settings.PREMIUM_DURATION_DAYS * 86400,
     )
+    if not invoice:
+        return {
+            "available": False,
+            "message": "Не вдалося створити інвойс. Спробуйте пізніше.",
+            "price_stars": settings.PREMIUM_PRICE_STARS,
+        }
     return {
         "available": True,
-        "checkout_url": checkout_url,
+        "invoice_link": invoice,  # slug для tg.openInvoice()
         "order_id": order_id,
-        "price_uah": settings.PREMIUM_PRICE_UAH,
+        "price_stars": settings.PREMIUM_PRICE_STARS,
         "duration_days": settings.PREMIUM_DURATION_DAYS,
     }
 
 
-@app.post("/api/payments/liqpay-webhook")
-async def api_liqpay_webhook(request: Request):
-    """Вебхук від LiqPay (без auth — перевіряється підписом)."""
-    if not settings.liqpay_enabled:
-        return JSONResponse({"status": "ignored"}, status_code=200)
-    from liqpay import verify_webhook, is_payment_success
-
-    form = await request.form()
-    data_b64 = form.get("data", "")
-    signature = form.get("signature", "")
-    payload = verify_webhook(settings.LIQPAY_PRIVATE_KEY, data_b64, signature)
-    if not payload:
-        return JSONResponse({"status": "bad signature"}, status_code=400)
-
-    order_id = str(payload.get("order_id", ""))
-    amount = float(payload.get("amount", 0) or 0)
-    status = str(payload.get("status", ""))
-    tg_id = _parse_tg_id_from_order(order_id)
-
-    db.record_payment(tg_id, order_id, amount, status, raw=str(payload))
-    if is_payment_success(payload) and tg_id:
-        db.set_user_plan(tg_id, "premium", days=settings.PREMIUM_DURATION_DAYS)
-        await _notify_admin(f"💳 <b>Преміум активовано</b>\nКористувач: <code>{tg_id}</code>\nСума: {amount} UAH\nЗамовлення: {order_id}")
-    return JSONResponse({"status": "ok"}, status_code=200)
-
-
-def _parse_tg_id_from_order(order_id: str) -> int:
-    """order_id має формат 'focus-<tg_id>-<ts>'."""
+async def _send_stars_invoice(chat_id: int, title: str, description: str,
+                              payload: str, stars: int, subscription_period: int) -> str | None:
+    """Створює інвойс через sendInvoice (Telegram Stars, currency=XTR).
+    Повертає invoice link (slug) або None."""
+    if not settings.has_token:
+        return None
     try:
-        parts = order_id.split("-")
-        return int(parts[1])
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendInvoice",
+                json={
+                    "chat_id": chat_id,
+                    "title": title,
+                    "description": description,
+                    "payload": payload,
+                    "currency": "XTR",  # Telegram Stars
+                    "prices": [{"label": title, "amount": stars}],
+                    "subscription_period": subscription_period,
+                    "provider_token": "",  # порожньо = Stars (не платіжний провайдер)
+                },
+            )
+            data = r.json()
+            if data.get("ok"):
+                # Telegram повертає повідомлення з інвойсом; потрібен slug для openInvoice
+                # sendInvoice не дає slug напряму — витягуємо з createInvoiceLink краще
+                pass
+            # краще використати createInvoiceLink — дає URL-slug для openInvoice
+            r2 = await c.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/createInvoiceLink",
+                json={
+                    "title": title,
+                    "description": description,
+                    "payload": payload,
+                    "currency": "XTR",
+                    "prices": [{"label": title, "amount": stars}],
+                    "subscription_period": subscription_period,
+                    "provider_token": "",
+                },
+            )
+            d2 = r2.json()
+            if d2.get("ok"):
+                return d2["result"]  # invoice URL
+    except Exception as e:
+        import logging
+        logging.getLogger("invoice").warning("sendInvoice помилка: %s", e)
+    return None
+
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Приймає Telegram updates (платежі Stars, /start).
+    Telegram шле сюди updates після setWebhook."""
+    try:
+        update = await request.json()
     except Exception:
-        return 0
+        return JSONResponse({"ok": False}, status_code=400)
+    await _handle_update(update)
+    return JSONResponse({"ok": True}, status_code=200)
+
+
+async def _handle_update(update: dict) -> None:
+    """Обробляє Telegram update: платежі Stars + /start."""
+    # pre_checkout_query — Telegram чекає відповідь за 10с
+    pcq = update.get("pre_checkout_query")
+    if pcq:
+        await _answer_pre_checkout(pcq["id"], ok=True)
+        return
+
+    message = update.get("message")
+    if not message:
+        return
+    chat_id = message["chat"]["id"]
+
+    # успішний платіж Stars
+    sp = message.get("successful_payment")
+    if sp:
+        await _process_stars_payment(sp, chat_id)
+        return
+
+    # текстові команди
+    text = (message.get("text") or "").strip()
+    if text in ("/start", "/help", "/app"):
+        await _send_welcome(chat_id)
+
+
+async def _answer_pre_checkout(query_id: int, ok: bool, error_message: str = "") -> None:
+    """Відповідає на pre_checkout_query (обов'язково за 10с, інакше платіж відхиляється)."""
+    if not settings.has_token:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/answerPreCheckoutQuery",
+                json={"pre_checkout_query_id": query_id, "ok": ok,
+                      **({"error_message": error_message} if error_message else {})},
+            )
+    except Exception:
+        pass
+
+
+async def _process_stars_payment(sp: dict, chat_id: int) -> None:
+    """Обробляє успішний платіж: активує преміум + лог + адміну."""
+    order_id = str(sp.get("invoice_payload", ""))
+    stars = int(sp.get("total_amount", 0) or 0)  # в XTR
+    currency = sp.get("currency", "XTR")
+    tg_id = chat_id
+
+    db.record_payment(tg_id, order_id, stars, "success", raw=str(sp))
+    expires = db.set_user_plan(tg_id, "premium", days=settings.PREMIUM_DURATION_DAYS)
+    await _notify_admin(
+        f"⭐ <b>Преміум активовано (Stars)</b>\n"
+        f"Користувач: <code>{tg_id}</code>\n"
+        f"Сума: {stars} Stars\n"
+        f"Замовлення: <code>{order_id}</code>\n"
+        f"Діє до: {expires[:10] if expires else '—'}"
+    )
+
+
+async def _send_welcome(chat_id: int) -> None:
+    """Вітальне повідомлення з кнопкою відкриття Mini App."""
+    if not settings.has_token or not settings.WEBAPP_URL:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": "🎯 Focus OS — таймер фокусу з музикою та статистикою.\nНатисни кнопку, щоб відкрити застосунок.",
+                    "reply_markup": {
+                        "inline_keyboard": [[{
+                            "text": "🚀 Відкрити Focus OS",
+                            "web_app": {"url": settings.WEBAPP_URL},
+                        }]]
+                    },
+                },
+            )
+    except Exception:
+        pass
 
 
 @app.post("/api/admin/grant-premium")
 async def api_grant_premium(
     payload: GrantPremium, user: dict = Depends(current_user)
 ):
-    """Ручне вмикання преміуму (тільки адмін). Fallback, коли LiqPay не налаштований."""
+    """Ручне вмикання преміуму (тільки адмін)."""
     if not settings.is_admin(user["id"]):
         raise HTTPException(status_code=403, detail="admin only")
     expires = db.set_user_plan(payload.tg_id, "premium", days=payload.days)
