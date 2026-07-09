@@ -317,6 +317,28 @@
     }
     $("#profile-plan").innerHTML = plan;
 
+    // мережева інформація
+    const net = data.network || {};
+    const conn = (navigator.connection || navigator.mozConnection || navigator.webkitConnection) || {};
+    const netRows = [
+      ["IP", net.ip || "—"],
+      ["Країна", net.country || "—"],
+      ["Місто", net.city || "—"],
+      ["Провайдер", net.isp || "—"],
+      ["Тип зв'язку", conn.effectiveType ? conn.effectiveType.toUpperCase() : "—"],
+    ];
+    let netHtml = '<div class="net-grid">' +
+      netRows.map(([k, v]) =>
+        '<div class="net-row"><span class="net-k">' + escapeHtml(k) + '</span>' +
+        '<span class="net-v">' + escapeHtml(String(v)) + '</span></div>'
+      ).join("") +
+      '<div class="net-row"><span class="net-k">Швидкість</span>' +
+        '<span class="net-v" id="net-speed">вимірюю…</span></div>' +
+      '</div>';
+    $("#profile-network").innerHTML = netHtml;
+    // асинхронно міряємо швидкість
+    measureNetworkSpeed();
+
     // рекомендації
     const recs = data.recommendations || [];
     if (recs.length) {
@@ -330,6 +352,21 @@
     // кнопка підписки
     const upBtn = $("#btn-upgrade");
     if (upBtn) upBtn.addEventListener("click", openSubscribe);
+  }
+
+  // вимірювання швидкості завантаження
+  async function measureNetworkSpeed() {
+    const el = $("#net-speed");
+    if (!el) return;
+    try {
+      const res = await API.measureSpeed();
+      if (el) {
+        const label = res.mbps >= 1 ? res.mbps + " Мбіт/с" : Math.round(res.mbps * 1000) + " Кбіт/с";
+        el.textContent = "↓ " + label;
+      }
+    } catch (e) {
+      if (el) el.textContent = "недоступно";
+    }
   }
 
   async function openSubscribe() {

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -98,22 +98,6 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
-async def _lookup_region(ip: str) -> str:
-    """Гео-інфо про IP через ip-api.com (без ключа)."""
-    if not ip or ip.startswith(("127.", "10.", "192.168.", "172.")):
-        return "локальна мережа"
-    try:
-        async with httpx.AsyncClient(timeout=8) as c:
-            r = await c.get(f"http://ip-api.com/json/{ip}?fields=country,regionName,city,isp,query&lang=uk")
-            d = r.json()
-            parts = [d.get("country"), d.get("regionName"), d.get("city")]
-            loc = ", ".join(p for p in parts if p)
-            isp = d.get("isp", "")
-            return f"{loc} · {isp}" if isp else loc
-    except Exception:
-        return "невідомо"
-
-
 async def _notify_admin(message: str) -> None:
     """Шле повідомлення адміну через Bot API (якщо задано токен і chat_id)."""
     if not settings.BOT_TOKEN or not settings.ADMIN_CHAT_ID:
@@ -192,12 +176,17 @@ async def api_categories():
 
 
 @app.get("/api/me")
-async def api_me(user: dict = Depends(current_user)):
-    """Повертає профіль користувача + тариф."""
+async def api_me(request: Request, user: dict = Depends(current_user)):
+    """Повертає профіль користувача + тариф + мережева інформація."""
     _ensure_user_exists(user)
     profile = db.get_user(user["id"]) or {}
     plan = db.get_user_plan(user["id"])
-    recommendations = _recommendations(profile, plan)
+    recommendations = _recommendations(profile, plan, user)
+
+    # мережева інформація користувача
+    ip = _client_ip(request)
+    geo = await _geo_info(ip)
+
     return {
         "user": user,
         "profile": profile,
@@ -207,24 +196,60 @@ async def api_me(user: dict = Depends(current_user)):
         "recommendations": recommendations,
         "is_admin": settings.is_admin(user["id"]),
         "premium_price_uah": settings.PREMIUM_PRICE_UAH,
+        "network": geo,
     }
 
 
-def _recommendations(profile: dict, plan: dict) -> list[str]:
-    """Прості рекомендації на основі активності."""
+async def _geo_info(ip: str) -> dict:
+    """Мережева інформація: IP, країна, місто, провайдер."""
+    if not ip:
+        return {"ip": "", "country": "", "city": "", "region": "", "isp": ""}
+    try:
+        async with httpx.AsyncClient(timeout=6) as c:
+            r = await c.get(
+                f"http://ip-api.com/json/{ip}?fields=country,regionName,city,isp,query&lang=uk"
+            )
+            d = r.json()
+            return {
+                "ip": ip,
+                "country": d.get("country", ""),
+                "region": d.get("regionName", ""),
+                "city": d.get("city", ""),
+                "isp": d.get("isp", ""),
+            }
+    except Exception:
+        return {"ip": ip, "country": "", "city": "", "region": "", "isp": ""}
+
+
+def _recommendations(profile: dict, plan: dict, user: dict) -> list[str]:
+    """Розширені рекомендації на основі активності (4-5 порад)."""
     recs = []
     total = profile.get("total_focus_seconds", 0) or 0
+    upload_count = profile.get("upload_count", 0) or 0
+    hours = total / 3600
+    name = (user.get("first_name") or "друг").strip()
+
     if total == 0:
-        recs.append("Почни з короткої сесії на 15 хвилин — так легше ввійти в ритм.")
+        # новачок
+        recs.append(f"Привіт, {name}! Почни з короткої сесії на 15 хвилин — так легше ввійти в ритм.")
         recs.append("Обери категорію «Над чим працюємо?» перед стартом таймера.")
+        recs.append("Додай свій трек на вкладці Музика — посилання на YouTube або пряме URL.")
+        recs.append("Тапни по таймеру, щоб виставити власний час фокусу.")
     else:
-        hours = total / 3600
         if hours < 5:
             recs.append("Спробуй режим Deep Work (50 хв) для глибокої концентрації.")
+        elif hours < 20:
+            recs.append("Чудовий прогрес! Постав ціль — 5 сесій поспіль для серії.")
+        else:
+            recs.append(f"Ти вже набрав {hours:.1f} годин фокусу. Вражаюча дисципліна! 🏆")
+
+        recs.append("Закріпи улюблений трек 📌, щоб він завжди був під рукою.")
+        if upload_count == 0:
+            recs.append("Створи свій плейліст — додай треки в категорію «Креатив» чи «DeepWork».")
         if not plan.get("is_premium"):
-            recs.append("Преміум відкриває статистику за категоріями та графіки прогресу.")
-        recs.append("Закріпи улюблений трек, щоб він завжди був під рукою.")
-    return recs
+            recs.append("Преміум відкриває статистику за категоріями, графіки прогресу та серії 🔥.")
+
+    return recs[:5]
 
 
 @app.get("/api/modes")
@@ -237,6 +262,23 @@ async def api_modes():
 async def api_stats(user: dict = Depends(current_user)):
     """Базова (безкоштовна) статистика."""
     return db.get_stats(user["id"])
+
+
+@app.get("/api/network/payload")
+async def api_network_payload(request: Request):
+    """Повертає фіксований payload (~256КБ) для вимірювання швидкості завантаження клієнтом.
+    Без авторизації — це просто фіксовані дані."""
+    # 256 KB випадкових даних (64 * 4096 байт)
+    import secrets
+    data = secrets.token_bytes(256 * 1024)
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Payload-Bytes": str(len(data)),
+        },
+    )
 
 
 @app.get("/api/stats/premium")
@@ -553,7 +595,8 @@ async def api_bug_report(
     _ensure_user_exists(user)
     ip = _client_ip(request)
     ua = request.headers.get("user-agent", "")
-    region = await _lookup_region(ip)
+    geo = await _geo_info(ip)
+    region = ", ".join(p for p in [geo.get("country"), geo.get("region"), geo.get("city")] if p)
 
     report_id = db.save_bug_report(
         tg_id=user["id"],
@@ -575,7 +618,9 @@ async def api_bug_report(
         f"<b>Платформа:</b> {payload.platform or '—'}\n"
         f"<b>Екран:</b> {payload.screen or '—'}\n"
         f"<b>IP:</b> <code>{ip}</code>\n"
-        f"<b>Регіон:</b> {region}\n"
+        f"<b>Країна:</b> {geo.get('country', '—')}\n"
+        f"<b>Місто:</b> {geo.get('city', '—')}\n"
+        f"<b>Провайдер:</b> {geo.get('isp', '—')}\n"
         f"<b>UA:</b> <code>{ua[:120]}</code>"
     )
     await _notify_admin(msg)
@@ -586,15 +631,22 @@ async def api_bug_report(
 
 
 @app.get("/")
-async def index():
-    """Головна сторінка Mini App (SPA)."""
+async def index(request: Request):
+    """Головна сторінка Mini App (SPA). Завжди свежа (no-cache)."""
     index_file = STATIC_DIR / "index.html"
     if not index_file.exists():
         return JSONResponse(
             {"error": "static/index.html не знайдено. Створіть фронтенд."},
             status_code=500,
         )
-    return FileResponse(index_file)
+    content = index_file.read_text(encoding="utf-8")
+    return HTMLResponse(
+        content,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 # Запуск через python app.py

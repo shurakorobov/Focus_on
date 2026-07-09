@@ -88,6 +88,17 @@ const API = (() => {
     grantPremium: (tg_id, days) =>
       request("POST", "/api/admin/grant-premium", { json: { tg_id, days } }),
 
+    // вимірювання швидкості мережі (завантаження ~256КБ з сервера)
+    measureSpeed: async () => {
+      const start = performance.now();
+      const res = await fetch("/api/network/payload?_=" + Date.now(), { cache: "no-store" });
+      const buf = await res.arrayBuffer();
+      const elapsed = (performance.now() - start) / 1000; // сек
+      const bytes = buf.byteLength;
+      const mbps = (bytes * 8) / 1e6 / elapsed; // мегабіт/с
+      return { mbps: Math.round(mbps * 100) / 100, bytes, elapsed: Math.round(elapsed * 100) / 100 };
+    },
+
     // баг-репорт
     reportBug: (message, platform = "", screen = "") =>
       request("POST", "/api/bug-report", { json: { message, platform, screen } }),

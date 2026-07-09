@@ -635,6 +635,20 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   font-size: 14px; color: var(--label-2);
   line-height: 1.4; margin-bottom: 10px;
 }
+.net-grid { display: flex; flex-direction: column; gap: 0; }
+.net-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--separator);
+  font-size: 15px;
+}
+.net-row:last-child { border-bottom: none; }
+.net-k { color: var(--label-2); }
+.net-v {
+  color: var(--label); font-weight: 500;
+  text-align: right; max-width: 60%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .rec-item {
   font-size: 15px; color: var(--label);
   line-height: 1.5;
