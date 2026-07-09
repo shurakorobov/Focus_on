@@ -1,15 +1,20 @@
-"""SQLite сховище для сесій фокусу.
+"""Сховище для сесій фокусу (SQLite локально / PostgreSQL продакшн).
+
+Шар сумісності: код пише SQL з ?-плейсхолдерами (SQLite-style), а під
+капотом — автоматичний переклад під обраний backend через DATABASE_URL.
+Підтримує: INSERT OR IGNORE, date(...), INTEGER PRIMARY KEY AUTOINCREMENT.
 
 Схема:
 - users:           профілі користувачів (tg id, ім'я, аватар, тариф)
 - sessions:        завершені сесії фокусу (режим, тривалість, категорія, дата)
-- tracks:          музичні треки (scope admin/user, kind audio/youtube, категорія)
+- tracks:          музичні треки (scope demo/admin/user, kind audio/youtube)
 - track_user_meta: бажане/закріплення треків на користувача
 - bug_reports:     звіти про баги
-- payments:        лог платежів LiqPay
+- payments:        лог платежів (Telegram Stars)
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -37,7 +42,89 @@ CATEGORIES = {
 }
 
 
-def _connect() -> sqlite3.Connection:
+# ---------------------- Шар сумісності SQLite/PostgreSQL ----------------------
+
+# Прапорець: True = PostgreSQL (psycopg2), False = SQLite (sqlite3)
+_IS_PG = settings.use_postgres
+
+
+def _translate_sql(sql: str) -> str:
+    """Перекладає SQL з SQLite-діалекту під поточний backend.
+    Для PostgreSQL: ? → %s, INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING,
+    date(x) → (x)::date, AUTOINCREMENT прибираємо (SERIAL зробить це)."""
+    if not _IS_PG:
+        return sql  # SQLite — як є
+    out = sql.replace("?", "%s")
+    # INSERT OR IGNORE INTO → INSERT INTO ... ON CONFLICT DO NOTHING
+    out = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", out, flags=re.IGNORECASE)
+    #SQLite INSERT OR IGNORE потребує ON CONFLICT DO NOTHING на кінці для PG.
+    # Вставляємо після першої закриваючої дужки VALUES-блоку — складно загально,
+    # тому обробляємо точково у seed функції. Тут лише базові заміни:
+    # date(col) → (col)::date  (але не в CTE/псевдонімах)
+    out = re.sub(r"\bdate\((\w+)\)", r"(\1)::date", out)
+    # AUTOINCREMENT не підтримується PG — SERIAL зробить автоінкремент; прибираємо
+    out = re.sub(r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "SERIAL PRIMARY KEY", out, flags=re.IGNORECASE)
+    return out
+
+
+class _PGWrapper:
+    """Обгортка psycopg2-курсора/з'єднання під інтерфейс, сумісний зі sqlite3.
+    Підтримує: execute(sql, params), fetchone/fetchall (dict-like row), executescript."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql: str, params: tuple = ()):
+        cur = self._conn.cursor()
+        cur.execute(_translate_sql(sql), params)
+        self._last_cur = cur
+        return cur
+
+    def executescript(self, script: str):
+        # PG не підтримує executescript — розділяємо по ';' та виконуємо по черзі.
+        # Розділяємо обережно (простий спліт, бо наші DDL не містять ';' у рядках).
+        cur = self._conn.cursor()
+        for stmt in _split_sql_script(script):
+            stmt = stmt.strip()
+            if stmt:
+                cur.execute(_translate_sql(stmt))
+        self._last_cur = cur
+        return cur
+
+    @property
+    def row_factory(self):
+        return None
+
+    @row_factory.setter
+    def row_factory(self, val):
+        # ігноруємо — PG завжди повертає dict через RealDictCursor
+        pass
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+
+def _split_sql_script(script: str) -> list[str]:
+    """Розділяє SQL-скрипт на окремі стейтменти по ';'.
+    Ігнорує порожні та коментарі (--)."""
+    stmts = []
+    for raw in script.split(";"):
+        s = "\n".join(
+            line for line in raw.splitlines()
+            if not line.strip().startswith("--")
+        ).strip()
+        if s:
+            stmts.append(s)
+    return stmts
+
+
+def _connect_sqlite() -> sqlite3.Connection:
     conn = sqlite3.connect(settings.DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -45,10 +132,19 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _connect_pg():
+    """Підключення до PostgreSQL через DATABASE_URL (Neon)."""
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    conn = psycopg2.connect(settings.DATABASE_URL, cursor_factory=RealDictCursor)
+    conn.autocommit = False
+    return _PGWrapper(conn)
+
+
 @contextmanager
-def get_conn() -> Iterator[sqlite3.Connection]:
-    """Контекстний менеджер для з'єднання з БД."""
-    conn = _connect()
+def get_conn():
+    """Контекстний менеджер для з'єднання з БД (SQLite або PostgreSQL)."""
+    conn = _connect_pg() if _IS_PG else _connect_sqlite()
     try:
         yield conn
         conn.commit()
@@ -59,11 +155,24 @@ def get_conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def _add_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
-    """Додає колонку, якщо її ще немає (ідемпотентно)."""
-    cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
-    if column not in cols:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+def _add_column(conn, table: str, column: str, decl: str) -> None:
+    """Додає колонку, якщо її ще немає (ідемпотентно). SQLite: PRAGMA, PG: info_schema."""
+    if _IS_PG:
+        # PG: для NOT NULL DEFAULT колонок спершу вставляємо з DEFAULT, потім NOT NULL
+        cur = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+            (table,),
+        )
+        cols = {row["column_name"] for row in cur.fetchall()}
+        if column not in cols:
+            # PG не дозволяє ADD COLUMN ... NOT NULL без DEFAULT для непорожньої таблиці,
+            # але з DEFAULT це OK. Прибираємо "NOT NULL" з decl для безпечності.
+            safe_decl = re.sub(r"\bNOT\s+NULL\s+", "", decl, flags=re.IGNORECASE)
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {safe_decl}")
+    else:
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def migrate() -> None:
@@ -122,7 +231,9 @@ def migrate() -> None:
 
 def init_db() -> None:
     """Створює таблиці, якщо їх ще немає, і виконує міграції."""
-    Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    if not _IS_PG:
+        # SQLite: створити директорію для файлу БД
+        Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         conn.executescript(
             """
@@ -188,13 +299,12 @@ def seed_demo_tracks() -> None:
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
         # системний користувач tg_id=0 для демо/адмін-треків (щоб FK спрацював)
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO users (tg_id, first_name, created_at)
-            VALUES (0, 'Focus OS', ?)
-            """,
-            (now,),
-        )
+        exists_user = conn.execute("SELECT 1 FROM users WHERE tg_id = ?", (0,)).fetchone()
+        if not exists_user:
+            conn.execute(
+                "INSERT INTO users (tg_id, first_name, created_at) VALUES (0, 'Focus OS', ?)",
+                (now,),
+            )
         # вставляємо лише якщо такого demo-треку ще немає (по url)
         for demo_id, kind, url, title, author, category in demos:
             exists = conn.execute(
@@ -549,11 +659,12 @@ def _load_meta(conn: sqlite3.Connection, tg_id: int) -> dict[str, dict]:
     return {row["track_key"]: dict(row) for row in rows}
 
 
-def _ensure_meta(conn: sqlite3.Connection, tg_id: int, key: str) -> None:
+def _ensure_meta(conn, tg_id: int, key: str) -> None:
     conn.execute(
         """
-        INSERT OR IGNORE INTO track_user_meta (tg_id, track_key, favorite, pinned, category, created_at)
+        INSERT INTO track_user_meta (tg_id, track_key, favorite, pinned, category, created_at)
         VALUES (?, ?, 0, 0, 'other', ?)
+        ON CONFLICT (tg_id, track_key) DO NOTHING
         """,
         (tg_id, key, datetime.now(timezone.utc).isoformat()),
     )

@@ -14,5 +14,7 @@ services:
         value: "292856117"
       - key: WEBAPP_URL
         sync: false
+      - key: DATABASE_URL
+        sync: false
     healthCheckPath: /api/health
     autoDeploy: true

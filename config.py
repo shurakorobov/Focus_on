@@ -21,6 +21,8 @@ class Settings:
     WEBAPP_URL: str = os.getenv("WEBAPP_URL", "").strip().rstrip("/")
     PORT: int = int(os.getenv("PORT", "8000"))
     DB_PATH: str = os.getenv("DB_PATH", "focus.db")
+    # Постійна PostgreSQL БД (Neon). Якщо задано — використовуємо замість SQLite.
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
 
     # Список Telegram ID адміністраторів (через кому): хто може додавати
     # загальну музику та завантажувати файли в хмару.
@@ -59,6 +61,11 @@ class Settings:
     @property
     def supabase_enabled(self) -> bool:
         return bool(self.SUPABASE_URL) and bool(self.SUPABASE_KEY)
+
+    @property
+    def use_postgres(self) -> bool:
+        """Чи використовуємо PostgreSQL (продакшн) замість SQLite (локально)."""
+        return bool(self.DATABASE_URL)
 
     @property
     def stars_enabled(self) -> bool:
