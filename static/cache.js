@@ -117,20 +117,32 @@ const AudioCache = (() => {
     try {
       const res = await fetch(url);
       if (!res.ok) return null;
-      // progress для великих файлів
-      const total = parseInt(res.headers.get("content-length") || "0");
-      const reader = res.body.getReader();
-      const chunks = [];
-      let received = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        received += value.length;
-        if (onProgress && total) onProgress(received / total);
+      // пробуємо streaming-прогрес, fallback на arrayBuffer
+      if (res.body && typeof res.body.getReader === "function") {
+        try {
+          const total = parseInt(res.headers.get("content-length") || "0");
+          const reader = res.body.getReader();
+          const chunks = [];
+          let received = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            if (onProgress && total) onProgress(received / total);
+          }
+          const blob = new Blob(chunks);
+          await set(key, blob);
+          return blob;
+        } catch (streamErr) {
+          // fallback нижче
+        }
       }
-      const blob = new Blob(chunks);
+      // fallback: простий arrayBuffer
+      const buf = await res.arrayBuffer();
+      const blob = new Blob([buf]);
       await set(key, blob);
+      if (onProgress) onProgress(1);
       return blob;
     } catch (e) {
       console.warn("AudioCache fetch error:", e);

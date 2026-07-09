@@ -117,6 +117,18 @@ body {
 }
 /* тап по таймеру = play/pause; візуальний фідбек */
 .timer-wrap:active .ring { transform: rotate(-90deg) scale(0.97); }
+.timer-wrap.stopping .ring {
+  transform: rotate(-90deg) scale(0.9);
+  filter: brightness(0.6);
+}
+.timer-wrap.stopping::after {
+  content: "Скидання…";
+  position: absolute;
+  bottom: -22px;
+  font-size: 12px;
+  color: var(--red);
+  pointer-events: none;
+}
 .timer-wrap .tap-hint {
   position: absolute;
   bottom: -2px;
@@ -572,32 +584,29 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   opacity: 0.8;
 }
 .track-actions {
-  display: flex; align-items: center; gap: 0;
+  display: flex; align-items: center; gap: 4px;
   flex-shrink: 0;
-  margin-left: auto; /* притиснути вправо */
-  padding-left: 8px;
+  padding-left: 4px;
 }
 .track-act {
   background: transparent; border: none;
   color: var(--label-3);
   display: flex; align-items: center; justify-content: center;
-  width: 44px; height: 44px;  /* hit-area ≥ Apple HIG */
-  min-width: 44px;
+  width: 40px; height: 40px;
+  min-width: 40px;
   padding: 0;
   cursor: pointer;
   border-radius: 50%;
   flex-shrink: 0;
+  overflow: visible;
   transition: transform 0.15s cubic-bezier(0.34,1.56,0.64,1), color 0.15s;
 }
-.track-act svg { width: 24px; height: 24px; display: block; }
+.track-act svg { width: 22px; height: 22px; display: block; overflow: visible; }
 .track-act:active { transform: scale(0.8); }
 .track-act.fav.active { color: var(--red); }
+.track-act.fav.active .ico-heart path { fill: currentColor; }
+.track-act.pin { color: var(--label-3); }
 .track-act.pin.active { color: var(--accent); }
-/* активне серце — заповнене, активний пін — заповнений */
-.track-act.fav.active .ico-heart path {
-  fill: currentColor;
-  stroke: currentColor;
-}
 .track-act.pin.active .ico-pin path { fill: currentColor; }
 
 /* ===== Профіль ===== */

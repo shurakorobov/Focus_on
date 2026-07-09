@@ -211,6 +211,20 @@
     else start();
   }
 
+  // STOP: довге утримання на таймері — повне скидання лічильника
+  function stop() {
+    if (state.tickerId) { clearInterval(state.tickerId); state.tickerId = null; }
+    state.running = false;
+    state.remaining = state.totalSeconds;
+    Music.stopAudio(true);
+    setFabIcon(false);
+    $("#phase-label").textContent = "Скинуто · тап щоб почати";
+    renderTimer();
+    haptic("med");
+    toast("Таймер скинуто");
+    // зберігаємо часткову сесію якщо щось відпрацювало
+  }
+
   function start() {
     state.running = true;
     state.startedAt = new Date().toISOString();
@@ -736,10 +750,10 @@
         "</div></div>" +
         '<div class="track-actions">' +
           '<button class="track-act fav' + favCls + '" data-act="fav" aria-label="Бажане">' +
-            '<svg class="ico-heart" viewBox="0 0 24 24" width="22" height="22"><path d="M12 21s-7.5-4.6-10-9.3C.6 8.4 2 5 5.2 5c2 0 3.3 1.1 4.1 2.3C10.5 5.9 12 5 13.9 5c3.2 0 4.6 3.4 3 6.7C19.5 16.4 12 21 12 21z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>' +
+            '<svg class="ico-heart" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>' +
           '</button>' +
           '<button class="track-act pin' + pinCls + '" data-act="pin" aria-label="Закріпити">' +
-            '<svg class="ico-pin" viewBox="0 0 24 24" width="20" height="20"><path d="M9 4h6l-1 5 3 3v2h-4v5l-1 1-1-1v-5H6v-2l3-3-1-5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>' +
+            '<svg class="ico-pin" viewBox="0 0 24 24"><path d="M14 4l-1 6 3 3v2h-4v5l-1 .5-1-.5v-5H6v-2l3-3-1-6h6m0-2H8c-.55 0-1 .45-1 1l.86 5.15L5.3 11.7c-.37.37-.3.99.05 1.34L6 14v3h12v-3l.65-.96c.35-.35.42-.97.05-1.34l-2.56-2.55L17 5c0-.55-.45-1-1-1z" fill="currentColor"/></svg>' +
           '</button>' +
         '</div>';
       el.appendChild(inner);
@@ -1304,11 +1318,8 @@
 
     $$(".tab").forEach((t) => t.addEventListener("click", () => showScreen(t.dataset.screen)));
 
-    // тап по кружечку таймера = play/pause (замість FAB)
-    $("#timer-wrap").addEventListener("click", (e) => {
-      // long-press / tap на time-display → редагування часу
-      toggleTimer();
-    });
+    // тап по кружечку таймера = play/pause; довге утримання = STOP (скинути)
+    setupTimerInteraction();
     // явна кнопка «Свій час» → відкриває пікер
     const ctBtn = $("#btn-custom-time");
     if (ctBtn) ctBtn.addEventListener("click", (e) => {
@@ -1330,7 +1341,15 @@
 
     // чіпи категорій на таймері
     function onTimerCategory(k) {
-      if (state.running) { toast("Зупини таймер, щоб змінити категорію"); return; }
+      // якщо таймер працює — зупиняємо і скидаємо (збереженням часткової сесії)
+      if (state.running) {
+        finish(false).then(() => {
+          state.category = k;
+          buildChips($("#timer-category-chips"), k, onTimerCategory);
+          toast("Категорію змінено, таймер скинуто");
+        });
+        return;
+      }
       state.category = k;
       buildChips($("#timer-category-chips"), k, onTimerCategory);
       haptic("light");
@@ -1401,6 +1420,64 @@
     });
   }
 
+  // ---------- Взаємодія з таймером: тап = play/pause, утримання = STOP ----------
+  function setupTimerInteraction() {
+    const wrap = $("#timer-wrap");
+    let pressTimer = null;
+    let longPressed = false;
+    let touchStartX = 0, touchStartY = 0;
+
+    wrap.addEventListener("touchstart", (e) => {
+      longPressed = false;
+      const t = e.touches[0];
+      touchStartX = t.clientX;
+      touchStartY = t.clientY;
+      // запускаємо таймер довгого натискання (700мс)
+      pressTimer = setTimeout(() => {
+        longPressed = true;
+        wrap.classList.add("stopping");
+        stop();
+        haptic("med");
+      }, 700);
+    }, { passive: true });
+
+    wrap.addEventListener("touchmove", (e) => {
+      const t = e.touches[0];
+      const dx = Math.abs(t.clientX - touchStartX);
+      const dy = Math.abs(t.clientY - touchStartY);
+      // якщо палець зсунувся — скасовуємо long-press
+      if (dx > 10 || dy > 10) {
+        clearTimeout(pressTimer);
+        wrap.classList.remove("stopping");
+      }
+    }, { passive: true });
+
+    function endPress(e) {
+      clearTimeout(pressTimer);
+      wrap.classList.remove("stopping");
+      if (!longPressed) {
+        // короткий тап — play/pause
+        toggleTimer();
+      }
+      longPressed = false;
+    }
+    wrap.addEventListener("touchend", endPress);
+    // fallback для миші (тестування в браузері)
+    let mouseTimer = null;
+    let mouseLong = false;
+    wrap.addEventListener("mousedown", (e) => {
+      if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
+      mouseLong = false;
+      mouseTimer = setTimeout(() => { mouseLong = true; stop(); }, 700);
+    });
+    wrap.addEventListener("mouseup", (e) => {
+      if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
+      clearTimeout(mouseTimer);
+      if (!mouseLong) toggleTimer();
+    });
+    wrap.addEventListener("mouseleave", () => { clearTimeout(mouseTimer); });
+  }
+
   // ---------- Аудіо-елемент: реакція на завершення/помилки ----------
   function setupAudioEvents() {
     const audio = $("#audio-el");
@@ -1431,16 +1508,96 @@
     });
   }
 
+  // ---------- Відновлення музики після розблокування/повернення у застосунок ----------
+  function setupVisibilityHandler() {
+    // коли застосунок згортається → WebKit призупиняє аудіо.
+    // при поверненні (розблокуванні) — відновлюємо якщо мало грати.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      //小幅 delay, щоб WebKit встиг «прокинутись»
+      setTimeout(() => {
+        // якщо таймер працював і трек був активний — поновлюємо
+        if (state.currentTrack && state.running) {
+          const audio = $("#audio-el");
+          if (audio.src && audio.paused) {
+            audio.play().catch(() => {
+              // якщо не вдалося (політика автоплею) — спробуємо через користувацький жест
+            });
+          }
+          Music._refreshPlayStates();
+        }
+      }, 300);
+    });
+    // окремо: focus повернувся до вікна
+    window.addEventListener("focus", () => {
+      if (state.currentTrack && state.running && state.isPlaying) {
+        const audio = $("#audio-el");
+        if (audio.src && audio.paused) {
+          audio.play().catch(() => {});
+        }
+      }
+    });
+  }
+
   // ---------- Старт ----------
   async function init() {
     bindEvents();
     setupModals();
     setupTimePicker();
     setupAudioEvents();
+    setupVisibilityHandler();
+    setupCrashReporting();
     selectMode("focus");
     setFabIcon(false);
     renderTimer();
     await loadProfile();
+  }
+
+  // ---------- Автолог крашів та аномалій ----------
+  function setupCrashReporting() {
+    // буфер останніх дій для контексту
+    const log = [];
+    const MAX_LOG = 30;
+    window.__focusLog = log;
+    window.__pushLog = (msg) => {
+      log.push("[" + new Date().toISOString().slice(11, 19) + "] " + msg);
+      if (log.length > MAX_LOG) log.shift();
+    };
+
+    // необроблені помилки
+    window.addEventListener("error", (e) => {
+      const msg = e.message + (e.filename ? " @ " + e.filename.split("/").pop() + ":" + e.lineno : "");
+      window.__pushLog("ERROR: " + msg);
+      autoReportBug("Авто-звіт (краш): " + msg + "\n\nКонтекст:\n" + log.slice(-10).join("\n"));
+    });
+    // необроблені проміси
+    window.addEventListener("unhandledrejection", (e) => {
+      const reason = (e.reason && (e.reason.message || String(e.reason))) || "unknown";
+      window.__pushLog("REJECT: " + reason);
+      autoReportBug("Авто-звіт (непійманий проміс): " + reason + "\n\nКонтекст:\n" + log.slice(-10).join("\n"));
+    });
+
+    // обгортка console.error для аномалій
+    const origErr = console.error;
+    console.error = function (...args) {
+      window.__pushLog("console.error: " + args.map(String).join(" ").slice(0, 200));
+      origErr.apply(console, args);
+    };
+  }
+
+  // дебаунс щоб не спамити адміна однаковими помилками
+  let lastAutoReport = 0;
+  let lastAutoReportMsg = "";
+  function autoReportBug(message) {
+    const now = Date.now();
+    // не надсилати ту ж помилку частіше ніж раз на 30с
+    if (message === lastAutoReportMsg && now - lastAutoReport < 30000) return;
+    lastAutoReport = now;
+    lastAutoReportMsg = message;
+    try {
+      const platform = platformInfo();
+      API.reportBug(message, platform, state.screen || "?").catch(() => {});
+    } catch (e) {}
   }
 
   document.addEventListener("DOMContentLoaded", init);
