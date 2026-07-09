@@ -468,7 +468,7 @@
       // тап: по арт-іконці — вибір треку для фокусу; по назві — потрійний тап = rename
       let tapCount = 0;
       let tapTimer = null;
-      const artEl = inner.querySelector(".track-art");
+      const artEl = el.querySelector(".track-art");
       el.addEventListener("click", (e) => {
         if (currentX < -10) { closeSwipe(); opened = false; return; }
         if (el.querySelector(".track-title-input")) return;
