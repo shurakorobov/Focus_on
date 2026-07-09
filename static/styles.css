@@ -278,6 +278,7 @@ body {
   position: relative;
   z-index: 1;
   background: var(--surface);
+  width: 100%;
 }
 .track-item:active .track-item-inner { background: var(--surface-2); }
 .track-item.playing .track-title { color: var(--accent); }
@@ -286,13 +287,17 @@ body {
 .track-delete-bg {
   position: absolute;
   top: 0; right: 0; bottom: 0;
-  width: 90px;
+  width: 96px;
   background: var(--red);
-  display: flex; align-items: center; justify-content: center;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 4px;
   color: #fff;
-  font-size: 15px; font-weight: 600;
+  font-size: 11px; font-weight: 600;
   z-index: 0;
+  cursor: pointer;
 }
+.track-delete-bg .del-label { letter-spacing: 0.3px; }
 .track-delete-bg.hidden { display: none; }
 
 /* inline-редагування назви */
@@ -302,13 +307,8 @@ body {
   padding: 2px 6px; width: 100%; max-width: 200px;
 }
 .track-title-input:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
-.track-art {
-  width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0;
-  background: linear-gradient(135deg, var(--surface-3), var(--surface-2));
-  display: flex; align-items: center; justify-content: center;
-  color: var(--label-2);
-}
-.track-art.yt { background: linear-gradient(135deg, #ff453a, #ff9f0a); color: #fff; }
+
+/* ===== Inline контролі треку (арт-іконка = кнопка play/pause) ===== */
 .track-meta { flex: 1; min-width: 0; }
 .track-title {
   font-size: 16px; font-weight: 500; color: var(--label);
@@ -317,32 +317,40 @@ body {
 .track-author { font-size: 13px; color: var(--label-3); margin-top: 1px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* ===== Контекстний плеєр ВИДАЛЕНО ===== */
-
-/* ===== Inline контролі треку (арт-іконка = кнопка play/pause) ===== */
 .track-art {
-  width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0;
+  width: 46px; height: 46px; border-radius: 12px; flex-shrink: 0;
   background: linear-gradient(135deg, var(--surface-3), var(--surface-2));
   display: flex; align-items: center; justify-content: center;
   color: var(--label-2);
   position: relative;
   cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.18s, background 0.18s;
 }
+.track-art:active { transform: scale(0.92); }
 .track-art.yt { background: linear-gradient(135deg, #ff453a, #ff9f0a); color: #fff; }
+
+/* активний трек — акцентний gradient + glow */
 .track-art.playing {
-  background: linear-gradient(135deg, var(--accent), #0a84ffcc);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #000));
   color: #fff;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent),
+              0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent);
 }
-.track-art .art-icon,
-.track-art .play-icon { transition: opacity 0.15s; }
-.track-art .play-icon {
+
+/* іконки play/pause: за замовчуванням показуємо play, при .playing (не .paused) — pause */
+.track-art .ico-play,
+.track-art .ico-pause {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  opacity: 0;
+  transition: opacity 0.15s;
 }
-.track-art.playing .art-icon { opacity: 0; }
-.track-art.playing .play-icon { opacity: 1; }
+.track-art .ico-play { opacity: 1; }
+.track-art .ico-pause { opacity: 0; }
+.track-art.playing .ico-play { opacity: 0; }
+.track-art.playing .ico-pause { opacity: 1; }
+/* на паузі у активного треку — знову play-іконка */
+.track-art.playing.paused .ico-play { opacity: 1; }
+.track-art.playing.paused .ico-pause { opacity: 0; }
 
 /* ===== Тайм-пікер ===== */
 .time-picker {
@@ -486,6 +494,20 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 
 /* ===== Категорії — чіпи ===== */
 .category-block { margin-top: 18px; }
+.custom-time-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: 16px auto 0;
+  padding: 10px 20px;
+  background: var(--surface-2);
+  color: var(--label-2);
+  border: 1px solid var(--separator);
+  border-radius: 999px;
+  font-size: 14px; font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s, background 0.15s, color 0.15s;
+}
+.custom-time-btn:active { transform: scale(0.95); }
+.custom-time-btn:hover { color: var(--accent); border-color: var(--accent); }
 .category-label {
   font-size: 13px; font-weight: 600;
   color: var(--label-2);
@@ -537,21 +559,28 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   opacity: 0.8;
 }
 .track-actions {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center; gap: 2px;
   flex-shrink: 0;
 }
 .track-act {
   background: transparent; border: none;
   color: var(--label-3);
-  font-size: 17px; line-height: 1;
-  padding: 8px;
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px;  /* hit-area ≥ Apple HIG */
+  padding: 0;
   cursor: pointer;
   border-radius: 50%;
-  transition: transform 0.12s, color 0.15s;
+  transition: transform 0.15s cubic-bezier(0.34,1.56,0.64,1), color 0.15s;
 }
-.track-act:active { transform: scale(0.85); }
+.track-act:active { transform: scale(0.8); }
 .track-act.fav.active { color: var(--red); }
 .track-act.pin.active { color: var(--accent); }
+/* активне серце — заповнене, активний пін — заповнений */
+.track-act.fav.active .ico-heart path {
+  fill: currentColor;
+  stroke: currentColor;
+}
+.track-act.pin.active .ico-pin path { fill: currentColor; }
 
 /* ===== Профіль ===== */
 .profile-scroll {

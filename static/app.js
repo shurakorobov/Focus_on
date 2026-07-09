@@ -39,6 +39,8 @@
     isAdmin: false,
     uploadEnabled: false,
     playerPlaying: false,
+    currentTrack: null,    // активний трек, що грає/на паузі
+    isPlaying: false,      // чи активний трек зараз грає
     selectedTrack: null,   // трек, обраний для фокусу
     customMode: false,     // чи встановлено свій час вручну
     // нові поля
@@ -169,6 +171,7 @@
     state.remaining = MODES[mode].dur;
     setModeColor(MODES[mode].color);
     $$(".mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+    if (!state.running) $("#phase-label").textContent = "Тапни по часу, щоб змінити";
     haptic("light");
     renderTimer();
   }
@@ -182,6 +185,7 @@
     state.remaining = seconds;
     setModeColor(MODES["focus"].color);
     $$(".mode-btn").forEach((b) => b.classList.remove("active"));
+    $("#phase-label").textContent = "Натисни, щоб почати";
     renderTimer();
   }
 
@@ -621,26 +625,25 @@
       el.dataset.group = t._group || "";
       el.dataset.key = t.track_key || "";
 
-      // червона кнопка-фон під свайп
+      // червона кнопка-фон під свайп (z-index:0, під inner)
       const delBg = document.createElement("div");
       delBg.className = "track-delete-bg";
-      delBg.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 7h12M9 7V5h6v2m-7 0v12a1 1 0 001 1h6a1 1 0 001-1V7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+      delBg.innerHTML =
+        '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 7h12M9 7V5h6v2m-7 0v12a1 1 0 001 1h6a1 1 0 001-1V7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>' +
+        '<span class="del-label">Видалити</span>';
       el.appendChild(delBg);
 
       const inner = document.createElement("div");
       inner.className = "track-item-inner";
-      inner.style.cssText = "display:flex;align-items:center;gap:14px;width:100%;";
-      const artIcon = isYt
-        ? '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M10 8l6 4-6 4z" fill="currentColor"/></svg>'
-        : '<svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>';
-      const playOverlay = '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
+      // НЕ затираємо cssText — позиціонування/z-index з CSS-класу!
       const catMeta = CATEGORIES[t.category] || CATEGORIES.other;
       const favCls = t.is_favorite ? " active" : "";
       const pinCls = t.is_pinned ? " active" : "";
+      // іконки play/pause перемикаються CSS-класом .playing + .paused
       inner.innerHTML =
-        '<div class="track-art ' + (isYt ? "yt" : "") + '">' +
-        '<span class="art-icon">' + artIcon + '</span>' +
-        '<span class="play-icon">' + playOverlay + '</span>' +
+        '<div class="track-art ' + (isYt ? "yt" : "") + '" data-act="play">' +
+          '<span class="ico-play"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor"/></svg></span>' +
+          '<span class="ico-pause"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg></span>' +
         '</div><div class="track-meta"><div class="track-title-row">' +
         '<span class="track-title">' + escapeHtml(t.title || "Без назви") + '</span>' +
         '<span class="track-cat-badge" title="' + escapeHtml(catMeta.label) + '">' + catMeta.emoji + '</span>' +
@@ -648,8 +651,12 @@
         escapeHtml(t.author || (isYt ? "YouTube" : "")) +
         "</div></div>" +
         '<div class="track-actions">' +
-          '<button class="track-act fav' + favCls + '" data-act="fav" title="Бажане">❤</button>' +
-          '<button class="track-act pin' + pinCls + '" data-act="pin" title="Закріпити">📌</button>' +
+          '<button class="track-act fav' + favCls + '" data-act="fav" aria-label="Бажане">' +
+            '<svg class="ico-heart" viewBox="0 0 24 24" width="22" height="22"><path d="M12 21s-7.5-4.6-10-9.3C.6 8.4 2 5 5.2 5c2 0 3.3 1.1 4.1 2.3C10.5 5.9 12 5 13.9 5c3.2 0 4.6 3.4 3 6.7C19.5 16.4 12 21 12 21z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>' +
+          '</button>' +
+          '<button class="track-act pin' + pinCls + '" data-act="pin" aria-label="Закріпити">' +
+            '<svg class="ico-pin" viewBox="0 0 24 24" width="20" height="20"><path d="M9 4h6l-1 5 3 3v2h-4v5l-1 1-1-1v-5H6v-2l3-3-1-5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>' +
+          '</button>' +
         '</div>';
       el.appendChild(inner);
 
@@ -657,9 +664,30 @@
       el._titleEl = inner.querySelector(".track-title");
       el._trackData = t;
 
+      // оновити візуал під поточний стан відтворення
+      this._applyPlayState(el, t);
+
       // ---- жести ----
       this.bindTrackGestures(el, t);
       return el;
+    },
+
+    // Візуально відобразити стан відтворення на елементі треку
+    _applyPlayState(el, t) {
+      const art = el.querySelector(".track-art");
+      if (!art) return;
+      const isActive = state.currentTrack && state.currentTrack.track_key === t.track_key;
+      art.classList.toggle("playing", isActive);
+      // пауза показує play-іконку навіть у активного треку
+      art.classList.toggle("paused", isActive && !state.isPlaying);
+    },
+
+    // Оновити всі треки після зміни стану відтворення
+    _refreshPlayStates() {
+      $$(".track-item").forEach((el) => {
+        const t = el._trackData;
+        if (t) this._applyPlayState(el, t);
+      });
     },
 
     // ---------- Жести для треку ----------
@@ -667,6 +695,7 @@
       let startX = 0, startY = 0;
       let currentX = 0;
       let dragging = false;
+      let moved = false;
       let horizontal = null; // null | true | false
       let opened = false;     // чи відкрита кнопка видалення
       const SWIPE_OPEN = -88; // наскільки зсунути, щоб показати "видалити"
@@ -686,6 +715,7 @@
         startX = touch.clientX;
         startY = touch.clientY;
         dragging = true;
+        moved = false;
         horizontal = null;
         el.style.transition = "none";
       }, { passive: true });
@@ -696,6 +726,7 @@
         const dx = touch.clientX - startX;
         const dy = touch.clientY - startY;
 
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
         if (horizontal === null) {
           if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
             horizontal = Math.abs(dx) > Math.abs(dy);
@@ -730,26 +761,32 @@
         }
       });
 
-      // тап: по арт-іконці — вибір треку для фокусу; по назві — потрійний тап = rename
+      // тап: по арт-іконці — play/pause; по назві — потрійний тап = rename
       let tapCount = 0;
       let tapTimer = null;
-      const artEl = el.querySelector(".track-art");
-      el.addEventListener("click", (e) => {
-        // кнопки бажаного/закріпити
-        const actBtn = e.target.closest(".track-act");
-        if (actBtn) {
+
+      // окремі надійні обробники для кнопок дій (не покладаємось на bubbling)
+      el.querySelectorAll(".track-act").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
           e.stopPropagation();
-          this.handleAction(actBtn.dataset.act, t, el);
-          return;
-        }
+          if (moved) return; // ігнорувати клік після свайпу
+          this.handleAction(btn.dataset.act, t, el);
+        });
+      });
+
+      el.addEventListener("click", (e) => {
+        if (moved) return; // клік після свайпу — ігноруємо
+        // кнопки бажаного/закріпити вже оброблені окремо
+        if (e.target.closest(".track-act")) return;
 
         if (currentX < -10) { closeSwipe(); opened = false; return; }
         if (el.querySelector(".track-title-input")) return;
 
-        // тап по арт-іконці → вибір треку для фокусу
+        // тап по арт-іконці → play / pause
         const onArt = e.target.closest(".track-art");
         if (onArt) {
-          this.selectTrack(t, artEl);
+          this.togglePlay(t);
           return;
         }
 
@@ -767,7 +804,7 @@
         }
         // одинарний тап по строці (не арт, не 2/3 тап по назві) → прев'ю
         if (!onTitle || tapCount === 0) {
-          this.play(t);
+          this.togglePlay(t);
         }
       });
 
@@ -791,16 +828,16 @@
           const btn = el.querySelector('.track-act.fav');
           if (btn) btn.classList.toggle("active", res.is_favorite);
           haptic("light");
-          // якщо зняли — прибираємо з групи бажаного
-          if (!res.is_favorite && (el.closest(".list-group") && el.closest(".list-group").previousElementSibling && el.closest(".list-group").previousElementSibling.textContent.includes("Бажане"))) {
-            this.load();
-          }
+          toast(res.is_favorite ? "♡ Додано в бажане" : "Прибрано з бажаного");
+          // перегрупувати, щоб трек потрапив у групу «Бажане» / покинув її
+          this.load();
         } else if (act === "pin") {
           const res = await API.togglePin(key);
           t.is_pinned = res.is_pinned;
           const btn = el.querySelector('.track-act.pin');
           if (btn) btn.classList.toggle("active", res.is_pinned);
           haptic("light");
+          toast(res.is_pinned ? "📌 Закріплено" : "Відкріплено");
           this.load(); // перегрупувати
         }
       } catch (e) {
@@ -862,37 +899,26 @@
       }
     },
 
-    // Вибір треку для фокусу (тап по арт-іконці)
-    selectTrack(t, artEl) {
-      const wasSelected = (state.selectedTrack && state.selectedTrack.url === t.url
-        && state.selectedTrack.title === t.title);
-      // знімаємо виділення з усіх
-      $$(".track-art").forEach((x) => x.classList.remove("playing"));
-      if (wasSelected) {
-        // другий тап по обраному — знімаємо вибір
-        state.selectedTrack = null;
-        toast("Трек прибрано");
-        return;
+    // ---------- Відтворення: єдиний стан currentTrack + isPlaying ----------
+
+    // Головний перемикач по тапу: новий трек → play; активний → pause/resume
+    togglePlay(t) {
+      const isActive = state.currentTrack && state.currentTrack.track_key === t.track_key;
+      if (isActive) {
+        if (state.isPlaying) this.pause();
+        else this.resume();
+      } else {
+        this.play(t);
       }
-      state.selectedTrack = t;
-      if (artEl) artEl.classList.add("playing");
-      toast("Трек: " + (t.title || "Без назви"));
-      haptic("light");
     },
 
-    // Запуск треку при старті таймера
-    playForTimer(t) {
-      this._playInternal(t, true);
-    },
-
-    // Звичайний тап — прев'ю (без прив'язки до таймера)
+    // Запуск нового треку
     play(t) {
-      this._playInternal(t, false);
-    },
-
-    _playInternal(t, fromTimer) {
+      // цей трек тепер активний
+      state.currentTrack = t;
+      state.selectedTrack = t; // для зв'язку з таймером
+      state.isPlaying = true;
       state.playerPlaying = true;
-      this.stopAudio(true);
 
       if (t.kind === "youtube" && t.embed_url) {
         const c = $("#yt-container");
@@ -903,37 +929,84 @@
         audio.src = t.url;
         audio.play().catch((e) => console.warn("audio play:", e.message));
       }
+      this._setupMediaSession(t);
+      this._refreshPlayStates();
       haptic("light");
     },
 
-    pauseAudio() {
+    // Пауза активного треку
+    pause() {
       const audio = $("#audio-el");
       audio.pause();
+      state.isPlaying = false;
       state.playerPlaying = false;
+      this._refreshPlayStates();
+      this._updateMediaPlaybackState("paused");
     },
 
+    // Відновлення активного треку
+    resume() {
+      const audio = $("#audio-el");
+      audio.play().catch(() => {});
+      state.isPlaying = true;
+      state.playerPlaying = true;
+      this._refreshPlayStates();
+      this._updateMediaPlaybackState("playing");
+    },
+
+    // Запуск треку при старті таймера
+    playForTimer(t) {
+      this.play(t);
+    },
+
+    pauseAudio() {
+      this.pause();
+    },
+
+    // Повна зупинка (таймер закінчився)
     stopAudio(silent) {
       const audio = $("#audio-el");
       audio.pause();
-      audio.removeAttribute("src");
       const c = $("#yt-container");
       c.innerHTML = "";
       c.classList.add("hidden");
+      state.currentTrack = null;
+      state.selectedTrack = null;
+      state.isPlaying = false;
       state.playerPlaying = false;
-      if (!silent) {
-        $$(".track-art").forEach((x) => x.classList.remove("playing"));
-      }
+      this._refreshPlayStates();
     },
 
-    togglePlay() {
-      const audio = $("#audio-el");
-      if (state.playerPlaying) {
-        audio.pause();
-        state.playerPlaying = false;
-      } else {
-        audio.play().catch(() => {});
-        state.playerPlaying = true;
-      }
+    // ---------- Media Session API: музика у фоні ----------
+    _setupMediaSession(t) {
+      if (!("mediaSession" in navigator)) return;
+      const title = t.title || "Без назви";
+      const artist = t.author || (t.kind === "youtube" ? "YouTube" : "Focus OS");
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: title,
+          artist: artist,
+          album: "Focus OS",
+          artwork: [
+            { src: "/static/icon-192.png", sizes: "192x192", type: "image/png" },
+          ],
+        });
+        navigator.mediaSession.setActionHandler("play", () => this.resume());
+        navigator.mediaSession.setActionHandler("pause", () => this.pause());
+        navigator.mediaSession.setActionHandler("stop", () => this.stopAudio(true));
+      } catch (e) {}
+      this._updateMediaPlaybackState("playing");
+    },
+
+    _updateMediaPlaybackState(stateStr) {
+      if (!("mediaSession" in navigator) || !("setPositionState" in navigator.mediaSession)) return;
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: 0, // потік невідомої довжини
+          playbackRate: 1,
+          position: 0,
+        });
+      } catch (e) {}
     },
   };
 
@@ -1085,6 +1158,17 @@
     $("#time-display").addEventListener("click", () => {
       if (!state.running) openTimePicker();
     });
+    $("#timer-wrap").addEventListener("click", (e) => {
+      // клік по кільцю/фону таймера теж відкриває пікер
+      if (!state.running && !e.target.closest(".modes") && !e.target.closest(".category-block") && !e.target.closest(".custom-time-btn")) {
+        openTimePicker();
+      }
+    });
+    // явна кнопка «Свій час»
+    const ctBtn = $("#btn-custom-time");
+    if (ctBtn) ctBtn.addEventListener("click", () => {
+      if (!state.running) openTimePicker();
+    });
 
     // кнопка "повідомити про баг"
     $("#btn-report-bug").addEventListener("click", () => {
@@ -1171,11 +1255,42 @@
     });
   }
 
+  // ---------- Аудіо-елемент: реакція на завершення/помилки ----------
+  function setupAudioEvents() {
+    const audio = $("#audio-el");
+    // трек закінчився — скинути активний стан
+    audio.addEventListener("ended", () => {
+      Music.stopAudio(true);
+    });
+    audio.addEventListener("error", () => {
+      if (state.currentTrack) {
+        state.isPlaying = false;
+        state.playerPlaying = false;
+        Music._refreshPlayStates();
+      }
+    });
+    // синхронізуємо стан паузи/програвання з реальним аудіо
+    audio.addEventListener("play", () => {
+      state.isPlaying = true;
+      state.playerPlaying = true;
+      Music._refreshPlayStates();
+    });
+    audio.addEventListener("pause", () => {
+      // pause може виникати і від нас — оновлюємо лише якщо це не повна зупинка
+      if (state.currentTrack) {
+        state.isPlaying = false;
+        state.playerPlaying = false;
+        Music._refreshPlayStates();
+      }
+    });
+  }
+
   // ---------- Старт ----------
   async function init() {
     bindEvents();
     setupModals();
     setupTimePicker();
+    setupAudioEvents();
     selectMode("focus");
     setFabIcon(false);
     renderTimer();
