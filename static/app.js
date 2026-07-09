@@ -31,6 +31,8 @@
     isAdmin: false,
     uploadEnabled: false,
     playerPlaying: false,
+    selectedTrack: null,   // трек, обраний для фокусу
+    customMode: false,     // чи встановлено свій час вручну
   };
 
   // ---------- DOM ----------
@@ -109,11 +111,24 @@
       return;
     }
     state.mode = mode;
+    state.customMode = false;
     state.totalSeconds = MODES[mode].dur;
     state.remaining = MODES[mode].dur;
     setModeColor(MODES[mode].color);
     $$(".mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
     haptic("light");
+    renderTimer();
+  }
+
+  function setCustomTime(seconds) {
+    if (state.running) return;
+    if (seconds < 5) seconds = 5;
+    state.customMode = true;
+    state.mode = "focus"; // базовий режим для статистики
+    state.totalSeconds = seconds;
+    state.remaining = seconds;
+    setModeColor(MODES["focus"].color);
+    $$(".mode-btn").forEach((b) => b.classList.remove("active"));
     renderTimer();
   }
 
@@ -147,6 +162,10 @@
     setFabIcon(true);
     $("#phase-label").textContent = "У фокусі…";
     haptic("light");
+    // запускаємо музику, якщо обраний трек
+    if (state.selectedTrack) {
+      Music.playForTimer(state.selectedTrack);
+    }
   }
 
   function pause() {
@@ -155,6 +174,8 @@
     state.tickerId = null;
     setFabIcon(false);
     $("#phase-label").textContent = "На паузі";
+    // ставимо музику на паузу
+    Music.pauseAudio();
   }
 
   async function finish(completed) {
@@ -162,6 +183,9 @@
     state.tickerId = null;
     state.running = false;
     setFabIcon(false);
+
+    // зупиняємо музику
+    Music.stopAudio(true);
 
     const elapsed = state.totalSeconds - state.remaining;
     const payload = {
@@ -349,11 +373,14 @@
       const inner = document.createElement("div");
       inner.className = "track-item-inner";
       inner.style.cssText = "display:flex;align-items:center;gap:14px;width:100%;";
+      const artIcon = isYt
+        ? '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M10 8l6 4-6 4z" fill="currentColor"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>';
+      const playOverlay = '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
       inner.innerHTML =
         '<div class="track-art ' + (isYt ? "yt" : "") + '">' +
-        (isYt
-          ? '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M10 8l6 4-6 4z" fill="currentColor"/></svg>'
-          : '<svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>') +
+        '<span class="art-icon">' + artIcon + '</span>' +
+        '<span class="play-icon">' + playOverlay + '</span>' +
         '</div><div class="track-meta"><div class="track-title">' +
         escapeHtml(t.title || "Без назви") +
         '</div><div class="track-author">' +
@@ -438,14 +465,22 @@
         }
       });
 
-      // тап: відтворення + лічильник потрійного тапу на назві
+      // тап: по арт-іконці — вибір треку для фокусу; по назві — потрійний тап = rename
       let tapCount = 0;
       let tapTimer = null;
+      const artEl = inner.querySelector(".track-art");
       el.addEventListener("click", (e) => {
         if (currentX < -10) { closeSwipe(); opened = false; return; }
         if (el.querySelector(".track-title-input")) return;
 
-        // потрійний тап саме по назві
+        // тап по арт-іконці → вибір треку для фокусу
+        const onArt = e.target.closest(".track-art");
+        if (onArt) {
+          this.selectTrack(t, artEl);
+          return;
+        }
+
+        // потрійний тап по назві → перейменування
         const onTitle = e.target.closest(".track-title");
         if (onTitle && t.id) {
           tapCount++;
@@ -457,7 +492,7 @@
           }
           tapTimer = setTimeout(() => { tapCount = 0; }, 400);
         }
-        // одинарний тап — відтворення (тільки якщо це не 2/3 тап по назві)
+        // одинарний тап по строці (не арт, не 2/3 тап по назві) → прев'ю
         if (!onTitle || tapCount === 0) {
           this.play(t);
         }
@@ -527,18 +562,36 @@
       }
     },
 
+    // Вибір треку для фокусу (тап по арт-іконці)
+    selectTrack(t, artEl) {
+      const wasSelected = (state.selectedTrack && state.selectedTrack.url === t.url
+        && state.selectedTrack.title === t.title);
+      // знімаємо виділення з усіх
+      $$(".track-art").forEach((x) => x.classList.remove("playing"));
+      if (wasSelected) {
+        // другий тап по обраному — знімаємо вибір
+        state.selectedTrack = null;
+        toast("Трек прибрано");
+        return;
+      }
+      state.selectedTrack = t;
+      if (artEl) artEl.classList.add("playing");
+      toast("Трек: " + (t.title || "Без назви"));
+      haptic("light");
+    },
+
+    // Запуск треку при старті таймера
+    playForTimer(t) {
+      this._playInternal(t, true);
+    },
+
+    // Звичайний тап — прев'ю (без прив'язки до таймера)
     play(t) {
-      $$(".track-item").forEach((x) => x.classList.remove("playing"));
-      const items = Array.from($$(".track-item"));
-      const target = items.find((x) => x.querySelector(".track-title") && x.querySelector(".track-title").textContent === (t.title || "Без назви"));
-      if (target) target.classList.add("playing");
+      this._playInternal(t, false);
+    },
 
-      $("#player").classList.remove("hidden");
-      $("#player-title").textContent = t.title || "Без назви";
-      $("#player-author").textContent = t.author || "";
+    _playInternal(t, fromTimer) {
       state.playerPlaying = true;
-      updatePlayerIcon();
-
       this.stopAudio(true);
 
       if (t.kind === "youtube" && t.embed_url) {
@@ -548,9 +601,15 @@
       } else {
         const audio = $("#audio-el");
         audio.src = t.url;
-        audio.play().catch(() => {});
+        audio.play().catch((e) => console.warn("audio play:", e.message));
       }
       haptic("light");
+    },
+
+    pauseAudio() {
+      const audio = $("#audio-el");
+      audio.pause();
+      state.playerPlaying = false;
     },
 
     stopAudio(silent) {
@@ -560,10 +619,9 @@
       const c = $("#yt-container");
       c.innerHTML = "";
       c.classList.add("hidden");
+      state.playerPlaying = false;
       if (!silent) {
-        $$(".track-item").forEach((x) => x.classList.remove("playing"));
-        $("#player").classList.add("hidden");
-        state.playerPlaying = false;
+        $$(".track-art").forEach((x) => x.classList.remove("playing"));
       }
     },
 
@@ -576,16 +634,8 @@
         audio.play().catch(() => {});
         state.playerPlaying = true;
       }
-      updatePlayerIcon();
     },
   };
-
-  function updatePlayerIcon() {
-    const btn = $("#player-play");
-    btn.innerHTML = state.playerPlaying
-      ? '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
-      : '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M8 5v14l11-7z"/></svg>';
-  }
 
   // ---------- Модал додавання ----------
   const Modal = {
@@ -692,14 +742,72 @@
 
     $$(".tab").forEach((t) => t.addEventListener("click", () => showScreen(t.dataset.screen)));
 
-    $("#player-stop").addEventListener("click", () => Music.stopAudio(false));
-    $("#player-play").addEventListener("click", () => Music.togglePlay());
+    // тап по таймеру — відкрити редактор часу (якщо таймер не запущений)
+    $("#time-display").addEventListener("click", () => {
+      if (!state.running) openTimePicker();
+    });
+  }
+
+  // ---------- Тайм-пікер ----------
+  function openTimePicker() {
+    const h = Math.floor(state.totalSeconds / 3600);
+    const m = Math.floor((state.totalSeconds % 3600) / 60);
+    const s = state.totalSeconds % 60;
+    $("#pick-h").value = h;
+    $("#pick-m").value = m;
+    $("#pick-s").value = s;
+    $("#time-modal").classList.remove("hidden");
+  }
+
+  function setupTimePicker() {
+    $("#btn-time-cancel").addEventListener("click", () => $("#time-modal").classList.add("hidden"));
+    $("#btn-time-save").addEventListener("click", () => {
+      const h = parseInt($("#pick-h").value) || 0;
+      const m = parseInt($("#pick-m").value) || 0;
+      const s = parseInt($("#pick-s").value) || 0;
+      const total = h * 3600 + m * 60 + s;
+      if (total >= 5) {
+        setCustomTime(total);
+        $("#time-modal").classList.add("hidden");
+      } else {
+        toast("Мінімум 5 секунд");
+      }
+    });
+
+    // стрілки +/- год/хв/сек
+    $$(".picker-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const dir = btn.dataset.dir;
+        const delta = parseInt(btn.dataset.delta);
+        const input = $("#pick-" + dir);
+        let val = parseInt(input.value) || 0;
+        val += delta;
+        if (dir === "m" || dir === "s") {
+          if (val < 0) val = 59;
+          if (val > 59) val = 0;
+        } else {
+          if (val < 0) val = 23;
+          if (val > 23) val = 0;
+        }
+        input.value = val;
+      });
+    });
+
+    // пресети
+    $$(".preset-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const sec = parseInt(btn.dataset.sec);
+        setCustomTime(sec);
+        $("#time-modal").classList.add("hidden");
+      });
+    });
   }
 
   // ---------- Старт ----------
   async function init() {
     bindEvents();
     setupModals();
+    setupTimePicker();
     selectMode("focus");
     setFabIcon(false);
     renderTimer();

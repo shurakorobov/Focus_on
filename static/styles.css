@@ -317,37 +317,66 @@ body {
 .track-author { font-size: 13px; color: var(--label-3); margin-top: 1px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* ===== Контекстний плеєр ===== */
-.player {
-  position: absolute;
-  left: 8px; right: 8px;
-  bottom: calc(var(--tabbar-h) + 100px + env(safe-area-inset-bottom));
-  background: rgba(44, 44, 46, 0.86);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-radius: 18px;
-  padding: 8px 10px;
-  display: flex; align-items: center; gap: 10px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.5);
-  z-index: 18;
-  animation: slideUp 0.25s ease;
-}
-@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-.player-art {
-  width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0;
+/* ===== Контекстний плеєр ВИДАЛЕНО ===== */
+
+/* ===== Inline контролі треку (арт-іконка = кнопка play/pause) ===== */
+.track-art {
+  width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0;
   background: linear-gradient(135deg, var(--surface-3), var(--surface-2));
-  display: flex; align-items: center; justify-content: center; color: var(--label-2);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--label-2);
+  position: relative;
+  cursor: pointer;
 }
-.player-info { flex: 1; min-width: 0; }
-.player-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.player-author { font-size: 12px; color: var(--label-3); }
-.player-btn {
-  width: 34px; height: 34px; border-radius: 50%; border: none;
-  background: var(--surface-3); color: var(--label);
-  display: flex; align-items: center; justify-content: center; cursor: pointer;
+.track-art.yt { background: linear-gradient(135deg, #ff453a, #ff9f0a); color: #fff; }
+.track-art.playing {
+  background: linear-gradient(135deg, var(--accent), #0a84ffcc);
+  color: #fff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 }
-.player-btn:active { background: var(--surface); }
-.player-btn svg { fill: currentColor; }
+.track-art .art-icon,
+.track-art .play-icon { transition: opacity 0.15s; }
+.track-art .play-icon {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+}
+.track-art.playing .art-icon { opacity: 0; }
+.track-art.playing .play-icon { opacity: 1; }
+
+/* ===== Тайм-пікер ===== */
+.time-picker {
+  display: flex; justify-content: center; gap: 24px;
+  margin: 16px 0;
+}
+.time-col {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.time-col input {
+  width: 64px; text-align: center;
+  font-size: 32px; font-weight: 700;
+  background: var(--surface-2); border: none; border-radius: 10px;
+  color: var(--label); padding: 8px 4px;
+  font-variant-numeric: tabular-nums;
+}
+.time-col input:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+.picker-btn {
+  width: 40px; height: 32px;
+  background: var(--surface-2); border: none; border-radius: 8px;
+  color: var(--accent); font-size: 14px; cursor: pointer;
+}
+.picker-btn:active { background: var(--surface-3); }
+.picker-label { font-size: 12px; color: var(--label-3); }
+.presets { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+.preset-btn {
+  background: var(--surface-2); border: 1px solid transparent; border-radius: 14px;
+  padding: 8px 14px; color: var(--label-2); font-size: 14px; font-weight: 500; cursor: pointer;
+}
+.preset-btn:active { background: var(--surface-3); }
+
+/* ===== Таймер — тапабельний центру ===== */
+.timer-wrap { cursor: pointer; }
+.timer-wrap.editing .time-display { color: var(--accent); }
 
 /* ===== Модал / Sheet ===== */
 .modal {
