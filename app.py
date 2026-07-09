@@ -370,11 +370,15 @@ async def api_list_tracks(
     _ensure_user_exists(user)
     _ensure_user_exists(user)
     saved = db.list_tracks(user["id"], category=category)
-    # youtube-треки отримують embed-URL для iframe; відносні URL → абсолютні
+    # embed-URL для iframe; відносні URL → абсолютні
     base = settings.WEBAPP_URL
     for t in saved:
         if t["kind"] == "youtube":
             t["embed_url"] = storage.youtube_embed_url(t["url"])
+        elif t["kind"] == "soundcloud":
+            t["embed_url"] = storage.soundcloud_embed_url(t["url"])
+        elif t["kind"] == "spotify":
+            t["embed_url"] = storage.spotify_embed_url(t["url"])
         elif base and t["url"].startswith("/"):
             t["url"] = base + t["url"]
     is_admin = settings.is_admin(user["id"])
@@ -412,16 +416,22 @@ async def api_add_track_url(
     kind = storage.classify_url(payload.url)
     title = payload.title
     author = payload.author
-    # якщо назва не вказана — підтягуємо з YouTube (назва + виконавець)
+    # якщо назва не вказана — підтягуємо з джерела (YouTube/SoundCloud/Spotify)
     if not title:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 if kind == "youtube":
                     info = await storage.fetch_youtube_info(client, payload.url)
-                    if info.get("title"):
-                        title = info["title"]
-                    if not author and info.get("author"):
-                        author = info["author"]
+                elif kind == "soundcloud":
+                    info = await storage.fetch_soundcloud_info(client, payload.url)
+                elif kind == "spotify":
+                    info = await storage.fetch_spotify_info(client, payload.url)
+                else:
+                    info = {"title": "", "author": ""}
+                if info.get("title"):
+                    title = info["title"]
+                if not author and info.get("author"):
+                    author = info["author"]
         except Exception:
             pass
     tid = db.add_track(

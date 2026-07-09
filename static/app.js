@@ -841,16 +841,19 @@
       const catMeta = CATEGORIES[t.category] || CATEGORIES.other;
       const favCls = t.is_favorite ? " active" : "";
       const pinCls = t.is_pinned ? " active" : "";
+      // CSS-клас арт-іконки за типом джерела
+      const artCls = isYt ? " yt" : (t.kind === "soundcloud" ? " sc" : (t.kind === "spotify" ? " sp" : ""));
+      const sourceLabel = isYt ? "YouTube" : (t.kind === "soundcloud" ? "SoundCloud" : (t.kind === "spotify" ? "Spotify" : ""));
       // іконки play/pause перемикаються CSS-класом .playing + .paused
       inner.innerHTML =
-        '<div class="track-art ' + (isYt ? "yt" : "") + '" data-act="play">' +
+        '<div class="track-art' + artCls + '" data-act="play">' +
           '<span class="ico-play"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor"/></svg></span>' +
           '<span class="ico-pause"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg></span>' +
         '</div><div class="track-meta"><div class="track-title-row">' +
         '<span class="track-title">' + escapeHtml(t.title || "Без назви") + '</span>' +
         '<span class="track-cat-badge" title="' + escapeHtml(catMeta.label) + '">' + catMeta.emoji + '</span>' +
         '</div><div class="track-author">' +
-        escapeHtml(t.author || (isYt ? "YouTube" : "")) +
+        escapeHtml(t.author || sourceLabel) +
         "</div></div>" +
         '<div class="track-actions">' +
           '<button class="track-act fav' + favCls + '" data-act="fav" aria-label="Бажане">' +
@@ -904,13 +907,15 @@
       const cat = state.category;
       let pool = (cat && cat !== "all") ? all.filter((t) => (t.category || "other") === cat) : all;
       if (!pool.length) pool = all;
-      // пріоритет: pinned → favorite → аудіо (краще для кешу/фону) → перший
+      // "embeddable" = iframe-based (YouTube/SoundCloud/Spotify) — без фонового відтворення
+      const isDirect = (t) => t.kind === "audio";
+      // пріоритет: pinned-аудіо → pinned → favorite-аудіо → favorite → аудіо → перший
       return (
-        pool.find((t) => t.is_pinned && t.kind !== "youtube") ||
+        pool.find((t) => t.is_pinned && isDirect(t)) ||
         pool.find((t) => t.is_pinned) ||
-        pool.find((t) => t.is_favorite && t.kind !== "youtube") ||
+        pool.find((t) => t.is_favorite && isDirect(t)) ||
         pool.find((t) => t.is_favorite) ||
-        pool.find((t) => t.kind !== "youtube") ||
+        pool.find(isDirect) ||
         pool[0]
       );
     },
@@ -1152,13 +1157,20 @@
       state.playerPlaying = true;
       this._refreshPlayStates();
 
-      if (t.kind === "youtube" && t.embed_url) {
+      // embedding-based джерела: YouTube, SoundCloud, Spotify
+      if ((t.kind === "youtube" || t.kind === "soundcloud" || t.kind === "spotify") && t.embed_url) {
         const c = $("#yt-container");
         c.classList.remove("hidden");
-        // enablejsapi=1 + origin — дозволяють керувати play/pause через postMessage
-        const ytSrc = t.embed_url + "&enablejsapi=1&origin=" + encodeURIComponent(location.origin);
-        c.innerHTML = '<iframe width="1" height="1" src="' + ytSrc + '&autoplay=1" frameborder="0" allow="autoplay; encrypted-media"></iframe>';
+        let src = t.embed_url;
+        if (t.kind === "youtube") {
+          // enablejsapi=1 + origin — дозволяють керувати play/pause через postMessage
+          src += "&enablejsapi=1&origin=" + encodeURIComponent(location.origin) + "&autoplay=1";
+        }
+        c.innerHTML = '<iframe width="1" height="1" src="' + src + '" frameborder="0" allow="autoplay; encrypted-media"></iframe>';
         this._setupMediaSession(t);
+        if (t.kind === "spotify") {
+          toast("Spotify: 30-сек прев’ю. Повний трек — з входом в акаунт.");
+        }
         haptic("light");
       } else {
         // пряме аудіо — кешуємо на пристрій, граємо з blob: URL
@@ -1257,7 +1269,11 @@
     _setupMediaSession(t) {
       if (!("mediaSession" in navigator)) return;
       const title = t.title || "Без назви";
-      const artist = t.author || (t.kind === "youtube" ? "YouTube" : "Focus OS");
+      const artist = t.author || (
+        t.kind === "youtube" ? "YouTube" :
+        t.kind === "soundcloud" ? "SoundCloud" :
+        t.kind === "spotify" ? "Spotify" : "Focus OS"
+      );
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: title,
@@ -1369,6 +1385,9 @@
         const res = await API.addTrackUrl({ url, title, author, scope, category: state.addCategory });
         Modal.close();
         toast("Додано: " + (res.title || "трек"));
+        // скидаємо фільтр категорій щоб новий трек точно був виден
+        state.musicCategory = "all";
+        buildChips($("#music-category-chips"), "all", onMusicCategory, true);
         await Music.load();
       } catch (e) {
         toast("Помилка: " + e.message);

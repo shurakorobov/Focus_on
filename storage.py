@@ -115,7 +115,7 @@ async def delete_from_supabase(
 
 
 def classify_url(url: str) -> str:
-    """Визначає тип треку за URL: 'youtube' (відео/плейлист) або 'audio'."""
+    """Визначає тип треку за URL: 'youtube' | 'soundcloud' | 'spotify' | 'audio'."""
     u = url.lower()
     youtube_hosts = (
         "youtube.com", "youtu.be", "www.youtube.com", "m.youtube.com",
@@ -123,7 +123,34 @@ def classify_url(url: str) -> str:
     )
     if any(h in u for h in youtube_hosts):
         return "youtube"
+    if "soundcloud.com" in u:
+        return "soundcloud"
+    if "spotify.com" in u or "spotify.link" in u:
+        return "spotify"
     return "audio"
+
+
+def soundcloud_embed_url(url: str) -> str:
+    """SoundCloud iframe-URL для відтворення треку."""
+    import urllib.parse as up
+    return (
+        "https://w.soundcloud.com/player/?url=" + up.quote(url, safe="")
+        + "&auto_play=true&color=%23bf5af2&hide_related=true&show_comments=false"
+    )
+
+
+def spotify_embed_url(url: str) -> str:
+    """Spotify embed iframe-URL. Приймає повний URL (open.spotify.com/track/...)."""
+    import re
+    # нормалізуємо: open.spotify.com/track/ID → open.spotify.com/embed/track/ID
+    # прибираємо можливі ?si=... query
+    path = url.split("?")[0].rstrip("/")
+    embed_url = re.sub(
+        r"open\.spotify\.com/(track|album|playlist|episode|show)/",
+        "open.spotify.com/embed/\\1/",
+        path,
+    )
+    return embed_url
 
 
 def youtube_playlist_id(url: str) -> str:
@@ -264,3 +291,48 @@ async def fetch_youtube_info(client: "httpx.AsyncClient", url: str) -> dict:
 async def fetch_youtube_title(client: "httpx.AsyncClient", url: str) -> str:
     info = await fetch_youtube_info(client, url)
     return info.get("title", "")
+
+
+async def fetch_soundcloud_info(client: "httpx.AsyncClient", url: str) -> dict:
+    """Назва та виконавець SoundCloud-треку через oEmbed."""
+    try:
+        r = await client.get(
+            "https://soundcloud.com/oembed",
+            params={"format": "json", "url": url},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            title = (data.get("title") or "").strip()
+            author = (data.get("author_name") or "").strip()
+            # формат SoundCloud: "TrackName by Artist"
+            if " by " in title and not author:
+                parts = title.rsplit(" by ", 1)
+                title, author = parts[0].strip(), parts[1].strip()
+            elif " by " in title:
+                # author вже є, прибираємо "by Artist" з title
+                title = title.rsplit(" by ", 1)[0].strip()
+            return {"title": title, "author": author}
+    except Exception:
+        pass
+    return {"title": "", "author": ""}
+
+
+async def fetch_spotify_info(client: "httpx.AsyncClient", url: str) -> dict:
+    """Назва та виконавець Spotify-треку через oEmbed."""
+    try:
+        r = await client.get(
+            "https://open.spotify.com/oembed",
+            params={"url": url},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            title = (data.get("title") or "").strip()
+            author = (data.get("provider_name") or "").strip()  # зазвичай "Spotify"
+            real_author = (data.get("thumbnail_url") and "") or ""
+            # Spotify oEmbed дає title типу "Song by Artist" або назву альбому
+            return {"title": title, "author": ""}
+    except Exception:
+        pass
+    return {"title": "", "author": ""}

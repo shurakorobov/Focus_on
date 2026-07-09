@@ -368,6 +368,8 @@ body {
 }
 .track-art:active { transform: scale(0.92); }
 .track-art.yt { background: linear-gradient(135deg, #ff453a, #ff9f0a); color: #fff; }
+.track-art.sc { background: linear-gradient(135deg, #ff5500, #ff8c00); color: #fff; }
+.track-art.sp { background: linear-gradient(135deg, #1db954, #1ed760); color: #fff; }
 
 /* активний трек — акцентний gradient + glow */
 .track-art.playing {
