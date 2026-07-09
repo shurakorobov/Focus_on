@@ -151,7 +151,7 @@ class AddTrackByURL(BaseModel):
     url: str = Field(..., min_length=3)
     title: str = ""
     author: str = ""
-    scope: str = Field("user", pattern="^(admin|user)$")
+    scope: str = Field("user", pattern="^(demo|admin|user)$")
     category: str = Field("other", pattern="^(deep_work|creative|learning|reading|training|other)$")
 
 
@@ -340,29 +340,19 @@ async def api_list_tracks(
 ):
     """Усі треки користувача: демо + адмінські + особисті (з фільтром за категорією)."""
     _ensure_user_exists(user)
-    demo = storage.list_demo_tracks(settings.WEBAPP_URL)
+    _ensure_user_exists(user)
     saved = db.list_tracks(user["id"], category=category)
-    # youtube-треки отримують embed-URL для iframe
+    # youtube-треки отримують embed-URL для iframe; відносні URL → абсолютні
+    base = settings.WEBAPP_URL
     for t in saved:
         if t["kind"] == "youtube":
             t["embed_url"] = storage.youtube_embed_url(t["url"])
-    # додаємо track_key/метадані до демо-треків теж
-    fav_keys = set(db.list_favorites(user["id"]))
-    pin_keys = set(db.list_pinned(user["id"]))
-    for d in demo:
-        d["track_key"] = db.track_key(d)
-        d["is_favorite"] = d["track_key"] in fav_keys
-        d["is_pinned"] = d["track_key"] in pin_keys
-        # демо-треки youtube-типу теж отримують embed_url
-        if d.get("kind") == "youtube":
-            d["embed_url"] = storage.youtube_embed_url(d["url"])
-        # категорія для демо-треку (якщо задана)
-        if "category" not in d:
-            d["category"] = "other"
+        elif base and t["url"].startswith("/"):
+            t["url"] = base + t["url"]
     is_admin = settings.is_admin(user["id"])
     upload_count = db.get_upload_count(user["id"])
     return {
-        "demo": demo,
+        "demo": [],
         "tracks": saved,
         "is_admin": is_admin,
         "upload_enabled": settings.supabase_enabled,
@@ -379,7 +369,8 @@ async def api_add_track_url(
     """Додає трек за прямим посиланням або YouTube."""
     _ensure_user_exists(user)
     scope = payload.scope
-    if scope == "admin" and not settings.is_admin(user["id"]):
+    # demo/admin — лише адмін
+    if scope in ("demo", "admin") and not settings.is_admin(user["id"]):
         raise HTTPException(status_code=403, detail="admin only")
     # ліміт для безкоштовних
     if scope == "user" and not db.is_premium(user["id"]):

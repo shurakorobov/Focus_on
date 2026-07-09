@@ -744,6 +744,7 @@
     applyPermissions() {
       const admin = state.isAdmin;
       $("#scope-admin-label").classList.toggle("hidden", !admin);
+      $("#scope-demo-label").classList.toggle("hidden", !admin);
       $("#scope-admin-label2").classList.toggle("hidden", !admin);
       $("#tab-upload").classList.toggle("hidden", !state.uploadEnabled);
     },
@@ -805,15 +806,16 @@
     row(t) {
       const isYt = t.kind === "youtube";
       const isDemo = t._group === "demo";
+      // демо-треки може видаляти лише адмін
+      const canDelete = !isDemo || state.isAdmin;
       const el = document.createElement("div");
       el.className = "track-item";
       el.dataset.id = t.id || "";
       el.dataset.group = t._group || "";
       el.dataset.key = t.track_key || "";
 
-      // червона кнопка-фон під свайп (z-index:0, під inner) — лише для треків, які можна видаляти
-      // демо-треки — вбудований контент, їх не можна видалити
-      if (!isDemo) {
+      // червона кнопка-фон під свайп — лише для треків, які можна видаляти
+      if (canDelete) {
         const delBg = document.createElement("div");
         delBg.className = "track-delete-bg";
         delBg.innerHTML =
@@ -904,7 +906,8 @@
 
     // ---------- Жести для треку ----------
     bindTrackGestures(el, t) {
-      const canDelete = t._group !== "demo"; // демо не видаляються
+      // демо може видалити лише адмін; свої треки — власник; admin — адмін
+      const canDelete = (t._group === "demo") ? state.isAdmin : true;
       let startX = 0, startY = 0;
       let currentX = 0;
       let dragging = false;
@@ -1425,44 +1428,45 @@
       m.addEventListener("click", (e) => {
         if (e.target === m) m.classList.add("hidden");
       });
-      // swipe-down по самому sheet → закрити (як нативний iOS sheet)
       const sheet = m.querySelector(".sheet");
       if (sheet) setupSheetSwipeDown(m, sheet);
     });
   }
 
-  // Нативний iOS-жест: swipe-down по заголовку sheet → закрити модал
+  // Нативний iOS-жест: swipe-down по всьому sheet (не лише handle) → закрити
+  // КРИТИЧНО: блокуємо прокрутку щоб Telegram не згортав застосунок
   function setupSheetSwipeDown(modal, sheet) {
-    const handle = sheet.querySelector(".sheet-handle") || sheet;
     let startY = 0, currentY = 0, dragging = false;
 
-    handle.addEventListener("touchstart", (e) => {
+    // Обробляємо дотик по всьому sheet — але не по інтерактивних елементах
+    sheet.addEventListener("touchstart", (e) => {
+      // не ламати кліки по кнопках/інпутах
+      if (e.target.closest("input, button, textarea, .seg, .seg-choice, .chip")) return;
       const t = e.touches[0];
       startY = t.clientY;
       dragging = true;
       sheet.style.transition = "none";
     }, { passive: true });
 
-    handle.addEventListener("touchmove", (e) => {
+    sheet.addEventListener("touchmove", (e) => {
       if (!dragging) return;
       const t = e.touches[0];
       currentY = t.clientY - startY;
       if (currentY > 0) {
+        // перехоплюємо жест, щоб Telegram не згорнув застосунок
+        e.preventDefault();
         sheet.style.transform = "translateY(" + currentY + "px)";
-        // затемнення фону пропорційно зсуву
         modal.style.background = "rgba(0,0,0," + Math.max(0.1, 0.5 - currentY / 600) + ")";
       }
-    }, { passive: true });
+    });
 
-    handle.addEventListener("touchend", () => {
+    sheet.addEventListener("touchend", () => {
       if (!dragging) return;
       dragging = false;
       sheet.style.transition = "";
       if (currentY > 100) {
-        // достатній зсув → закрити
         modal.classList.add("hidden");
       }
-      // скинути трансформ
       sheet.style.transform = "";
       modal.style.background = "";
       currentY = 0;

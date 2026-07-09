@@ -170,6 +170,44 @@ def init_db() -> None:
             """
         )
     migrate()
+    seed_demo_tracks()
+
+
+def seed_demo_tracks() -> None:
+    """Вставляє вбудовані демо-треки (scope='demo'), якщо їх ще немає.
+    Демо-треки тепер живуть у БД — адмін може їх додавати/видаляти."""
+    demos = [
+        ("demo_deep_calm", "audio", "/static/tracks/deep_calm.wav",
+         "Deep Calm", "Focus OS Demo", "other"),
+        ("demo_pulse_focus", "audio", "/static/tracks/pulse_focus.wav",
+         "Pulse Focus", "Focus OS Demo", "other"),
+        ("demo_focus_playlist", "youtube",
+         "https://music.youtube.com/playlist?list=OLAK5uy_ld7f9jlp-xLjPLIt9Q_UtzzFLwKMCETXs",
+         "Робоча збірка", "Netpeak Group", "deep_work"),
+    ]
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        # системний користувач tg_id=0 для демо/адмін-треків (щоб FK спрацював)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO users (tg_id, first_name, created_at)
+            VALUES (0, 'Focus OS', ?)
+            """,
+            (now,),
+        )
+        # вставляємо лише якщо такого demo-треку ще немає (по url)
+        for demo_id, kind, url, title, author, category in demos:
+            exists = conn.execute(
+                "SELECT 1 FROM tracks WHERE scope = 'demo' AND url = ?", (url,)
+            ).fetchone()
+            if not exists:
+                conn.execute(
+                    """
+                    INSERT INTO tracks (tg_id, scope, kind, url, title, author, created_at, category)
+                    VALUES (0, 'demo', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (kind, url, title, author, now, category),
+                )
 
 
 def track_key(t: dict) -> str:
@@ -522,22 +560,24 @@ def _ensure_meta(conn: sqlite3.Connection, tg_id: int, key: str) -> None:
 
 
 def list_tracks(tg_id: int, category: str | None = None) -> list[dict]:
-    """Повертає треки, доступні користувачу: усі адмінські + його особисті.
+    """Повертає треки, доступні користувачу: демо + усі адмінські + його особисті.
     Додає поля is_favorite, is_pinned, track_key з track_user_meta."""
     cat_sql = ""
-    params: tuple = (tg_id,)
+    params: tuple = ()
     if category and category != "all":
         cat_sql = " AND category = ?"
-        params = (tg_id, category)
+        params = (category,)
     with get_conn() as conn:
         rows = conn.execute(
             f"""
             SELECT id, tg_id, scope, kind, url, title, author, created_at, category
             FROM tracks
-            WHERE (scope = 'admin' OR tg_id = ?){cat_sql}
-            ORDER BY scope DESC, created_at DESC
+            WHERE (scope IN ('demo','admin') OR tg_id = ?){cat_sql}
+            ORDER BY
+              CASE scope WHEN 'demo' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+              created_at DESC
             """,
-            params,
+            (tg_id,) + params,
         ).fetchall()
         meta = _load_meta(conn, tg_id)
     result = []
