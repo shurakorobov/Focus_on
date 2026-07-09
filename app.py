@@ -603,6 +603,14 @@ async def api_grant_premium(
     return {"ok": True, "tg_id": payload.tg_id, "plan": "premium", "plan_expires_at": expires}
 
 
+@app.get("/api/admin/stats")
+async def api_admin_stats(user: dict = Depends(current_user)):
+    """Повна статистика використання застосунку (тільки адмін)."""
+    if not settings.is_admin(user["id"]):
+        raise HTTPException(status_code=403, detail="admin only")
+    return db.get_admin_stats()
+
+
 # ------------------------------ баг-репорти ---------------------------------
 
 

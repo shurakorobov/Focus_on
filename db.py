@@ -713,3 +713,158 @@ def record_payment(
             (tg_id, order_id, amount, status, raw, datetime.now(timezone.utc).isoformat()),
         )
         return int(cur.lastrowid)
+
+
+# ------------------------------ адмін-статистика ----------------------------
+
+
+def get_admin_stats() -> dict:
+    """Загальна статистика використання застосунку (для адміна)."""
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    week_ago = (now - timedelta(days=7)).isoformat()
+    month_ago = (now - timedelta(days=30)).isoformat()
+
+    with get_conn() as conn:
+        # користувачі
+        users_row = conn.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(total_focus_seconds),0) AS s FROM users"
+        ).fetchone()
+        total_users = int(users_row["c"])
+        total_focus_all = int(users_row["s"])
+
+        premium_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM users WHERE plan = 'premium'"
+        ).fetchone()
+        premium_users = int(premium_row["c"])
+
+        # активні за періоди
+        dau = conn.execute(
+            "SELECT COUNT(DISTINCT tg_id) AS c FROM sessions WHERE date(finished_at) = ?",
+            (today,),
+        ).fetchone()["c"]
+        wau = conn.execute(
+            "SELECT COUNT(DISTINCT tg_id) AS c FROM sessions WHERE finished_at >= ?",
+            (week_ago,),
+        ).fetchone()["c"]
+        mau = conn.execute(
+            "SELECT COUNT(DISTINCT tg_id) AS c FROM sessions WHERE finished_at >= ?",
+            (month_ago,),
+        ).fetchone()["c"]
+
+        # сесії
+        sessions_row = conn.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(actual),0) AS s FROM sessions"
+        ).fetchone()
+        total_sessions = int(sessions_row["c"])
+        total_session_seconds = int(sessions_row["s"])
+
+        today_sessions = conn.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(actual),0) AS s FROM sessions WHERE date(finished_at) = ?",
+            (today,),
+        ).fetchone()
+        completed_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM sessions WHERE completed = 1"
+        ).fetchone()["c"]
+
+        # за категоріями
+        by_category = conn.execute(
+            """
+            SELECT category, COUNT(*) AS c, COALESCE(SUM(actual),0) AS s,
+                   COUNT(DISTINCT tg_id) AS u
+            FROM sessions WHERE completed = 1
+            GROUP BY category ORDER BY s DESC
+            """
+        ).fetchall()
+
+        # за режимами
+        by_mode = conn.execute(
+            """
+            SELECT mode, COUNT(*) AS c, COALESCE(SUM(actual),0) AS s
+            FROM sessions WHERE completed = 1
+            GROUP BY mode ORDER BY s DESC
+            """
+        ).fetchall()
+
+        # треки
+        tracks_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM tracks"
+        ).fetchone()
+        total_tracks = int(tracks_row["c"])
+        admin_tracks = conn.execute(
+            "SELECT COUNT(*) AS c FROM tracks WHERE scope = 'admin'"
+        ).fetchone()["c"]
+        fav_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM track_user_meta WHERE favorite = 1"
+        ).fetchone()["c"]
+        pin_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM track_user_meta WHERE pinned = 1"
+        ).fetchone()["c"]
+
+        # активність по днях (останні 14)
+        by_day = conn.execute(
+            """
+            SELECT date(finished_at) AS d, COUNT(*) AS c,
+                   COUNT(DISTINCT tg_id) AS u, COALESCE(SUM(actual),0) AS s
+            FROM sessions WHERE finished_at >= ?
+            GROUP BY d ORDER BY d ASC
+            """,
+            (week_ago,),
+        ).fetchall()
+
+        # топ користувачі
+        top_users = conn.execute(
+            """
+            SELECT u.tg_id, u.first_name, u.username,
+                   u.total_focus_seconds, COUNT(s.id) AS sessions, u.plan
+            FROM users u
+            LEFT JOIN sessions s ON s.tg_id = u.tg_id AND s.completed = 1
+            GROUP BY u.tg_id
+            ORDER BY u.total_focus_seconds DESC
+            LIMIT 10
+            """
+        ).fetchall()
+
+        # платежі
+        payments_row = conn.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS s FROM payments WHERE status IN ('success','sandbox')"
+        ).fetchone()
+        revenue_uah = float(payments_row["s"])
+
+        # баг-репорти
+        bugs_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM bug_reports"
+        ).fetchone()["c"]
+
+    return {
+        "users": {
+            "total": total_users,
+            "premium": premium_users,
+            "dau": dau, "wau": wau, "mau": mau,
+            "total_focus_seconds": total_focus_all,
+        },
+        "sessions": {
+            "total": total_sessions,
+            "completed": completed_row,
+            "today": int(today_sessions["c"]),
+            "today_seconds": int(today_sessions["s"]),
+            "total_seconds": total_session_seconds,
+        },
+        "by_category": [dict(r) for r in by_category],
+        "by_mode": [dict(r) for r in by_mode],
+        "by_day": [dict(r) for r in by_day],
+        "tracks": {
+            "total": total_tracks,
+            "admin": admin_tracks,
+            "favorites": fav_count,
+            "pinned": pin_count,
+        },
+        "top_users": [dict(r) for r in top_users],
+        "payments": {
+            "count": int(payments_row["c"]),
+            "revenue_uah": revenue_uah,
+        },
+        "bug_reports": bugs_row,
+        "categories": CATEGORIES,
+        "modes": FOCUS_MODES,
+    }

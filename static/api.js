@@ -87,6 +87,7 @@ const API = (() => {
     subscribe: () => request("POST", "/api/subscribe"),
     grantPremium: (tg_id, days) =>
       request("POST", "/api/admin/grant-premium", { json: { tg_id, days } }),
+    adminStats: () => request("GET", "/api/admin/stats"),
 
     // вимірювання швидкості мережі (завантаження ~256КБ з сервера)
     measureSpeed: async () => {

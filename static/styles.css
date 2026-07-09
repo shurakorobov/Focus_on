@@ -679,6 +679,12 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 
 /* Кеш музики */
 .cache-actions { margin-top: 12px; }
+/* Адмін-дашборд */
+.admin-dashboard { margin-top: 8px; }
+.admin-cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  margin-bottom: 12px;
+}
 .cache-btn {
   width: 100%;
   padding: 11px;

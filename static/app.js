@@ -296,12 +296,95 @@
       const data = await API.me();
       state.me = data;
       state.isPremium = !!data.is_premium;
+      state.isAdmin = !!data.is_admin;
       state.planExpiresAt = data.plan_expires_at || "";
       state.premiumPriceUah = data.premium_price_uah || 100;
       renderProfile(data);
+      // адмін-дашборд
+      if (data.is_admin) {
+        $("#admin-dashboard").classList.remove("hidden");
+        loadAdminStats();
+      } else {
+        $("#admin-dashboard").classList.add("hidden");
+      }
     } catch (e) {
       $("#profile-head").innerHTML = '<div class="hint-inline">Не вдалося завантажити профіль</div>';
     }
+  }
+
+  // ---------- Адмін-статистика ----------
+  async function loadAdminStats() {
+    const el = $("#admin-stats");
+    if (!el) return;
+    try {
+      const d = await API.adminStats();
+      const u = d.users || {};
+      const s = d.sessions || {};
+      const t = d.tracks || {};
+      const p = d.payments || {};
+      const catsMeta = d.categories || {};
+      const modesMeta = d.modes || {};
+
+      let html = '<div class="admin-cards">';
+      html += adminCard("👥", u.total, "користувачів");
+      html += adminCard("⭐", u.premium, "преміум");
+      html += adminCard("📊", s.total, "сесій");
+      html += adminCard("🔥", u.dau || 0, "DAU");
+      html += adminCard("📅", u.wau || 0, "WAU");
+      html += adminCard("🎵", t.total, "треків");
+      html += '</div>';
+
+      html += '<div class="net-row"><span class="net-k">Активних за місяць (MAU)</span><span class="net-v">' + (u.mau || 0) + '</span></div>';
+      html += '<div class="net-row"><span class="net-k">Завершених сесій</span><span class="net-k">' + s.completed + '</span></div>';
+      html += '<div class="net-row"><span class="net-k">Сесій сьогодні</span><span class="net-v">' + s.today + '</span></div>';
+      html += '<div class="net-row"><span class="net-k">Загальний фокус</span><span class="net-v">' + human(u.total_focus_seconds) + '</span></div>';
+      html += '<div class="net-row"><span class="net-k">Доход (UAH)</span><span class="net-v">' + p.revenue_uah + ' ₴</span></div>';
+      html += '<div class="net-row"><span class="net-k">Платежів</span><span class="net-v">' + p.count + '</span></div>';
+      html += '<div class="net-row"><span class="net-k">Баг-репортів</span><span class="net-v">' + d.bug_reports + '</span></div>';
+      html += '<div class="net-row"><span class="net-k">Обраних (♥)</span><span class="net-v">' + t.favorites + '</span></div>';
+      html += '<div class="net-row"><span class="net-k">Закріплених (📌)</span><span class="net-v">' + t.pinned + '</span></div>';
+
+      // графік по днях
+      if (d.by_day && d.by_day.length) {
+        const maxC = Math.max(...d.by_day.map((x) => x.c), 1);
+        html += '<h2 class="group-title">Активність (7 днів)</h2><div class="chart">';
+        d.by_day.forEach((day) => {
+          const pct = Math.round((day.c / maxC) * 100);
+          const lbl = day.d.slice(5).replace("-", "/");
+          html += '<div class="chart-col"><div class="chart-bar" style="height:' + Math.max(pct, 4) + '%"></div><span class="chart-lbl">' + lbl + '</span></div>';
+        });
+        html += '</div>';
+      }
+
+      // за категоріями
+      if (d.by_category && d.by_category.length) {
+        html += '<h2 class="group-title">За категоріями</h2><div class="list-group">';
+        d.by_category.forEach((r) => {
+          const meta = catsMeta[r.category] || { label: r.category, emoji: "" };
+          html += '<div class="list-row"><span>' + meta.emoji + ' ' + escapeHtml(meta.label) + '</span><span class="r-time">' + r.c + ' сес · ' + human(r.s) + '</span></div>';
+        });
+        html += '</div>';
+      }
+
+      // топ користувачі
+      if (d.top_users && d.top_users.length) {
+        html += '<h2 class="group-title">Топ користувачів</h2><div class="list-group">';
+        d.top_users.forEach((u, i) => {
+          const name = u.first_name || u.username || ("ID:" + u.tg_id);
+          const star = u.plan === "premium" ? " ⭐" : "";
+          html += '<div class="list-row"><span>' + (i + 1) + ". " + escapeHtml(name) + star + '</span><span class="r-time">' + human(u.total_focus_seconds) + '</span></div>';
+        });
+        html += '</div>';
+      }
+
+      el.innerHTML = html;
+    } catch (e) {
+      el.innerHTML = '<div class="hint-inline">Не вдалося завантажити статистику</div>';
+    }
+  }
+
+  function adminCard(emoji, value, label) {
+    return '<div class="streak-card"><div class="stat-value">' + emoji + ' ' + value + '</div><div class="stat-label">' + label + '</div></div>';
   }
 
   function renderProfile(data) {
@@ -721,19 +804,23 @@
 
     row(t) {
       const isYt = t.kind === "youtube";
+      const isDemo = t._group === "demo";
       const el = document.createElement("div");
       el.className = "track-item";
       el.dataset.id = t.id || "";
       el.dataset.group = t._group || "";
       el.dataset.key = t.track_key || "";
 
-      // червона кнопка-фон під свайп (z-index:0, під inner)
-      const delBg = document.createElement("div");
-      delBg.className = "track-delete-bg";
-      delBg.innerHTML =
-        '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 7h12M9 7V5h6v2m-7 0v12a1 1 0 001 1h6a1 1 0 001-1V7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>' +
-        '<span class="del-label">Видалити</span>';
-      el.appendChild(delBg);
+      // червона кнопка-фон під свайп (z-index:0, під inner) — лише для треків, які можна видаляти
+      // демо-треки — вбудований контент, їх не можна видалити
+      if (!isDemo) {
+        const delBg = document.createElement("div");
+        delBg.className = "track-delete-bg";
+        delBg.innerHTML =
+          '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 7h12M9 7V5h6v2m-7 0v12a1 1 0 001 1h6a1 1 0 001-1V7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>' +
+          '<span class="del-label">Видалити</span>';
+        el.appendChild(delBg);
+      }
 
       const inner = document.createElement("div");
       inner.className = "track-item-inner";
@@ -817,6 +904,7 @@
 
     // ---------- Жести для треку ----------
     bindTrackGestures(el, t) {
+      const canDelete = t._group !== "demo"; // демо не видаляються
       let startX = 0, startY = 0;
       let currentX = 0;
       let dragging = false;
@@ -839,6 +927,7 @@
 
       el.addEventListener("touchstart", (e) => {
         if (el.querySelector(".track-title-input")) return; // не ламати редагування
+        if (!canDelete) return; // демо не свайпаються
         const touch = e.touches[0];
         startX = touch.clientX;
         startY = touch.clientY;
@@ -1331,11 +1420,52 @@
       }
     });
 
-    // закриття модалів по тапу на фон
+    // закриття модалів по тапу на фон + swipe-down по .sheet
     $$(".modal").forEach((m) => {
       m.addEventListener("click", (e) => {
         if (e.target === m) m.classList.add("hidden");
       });
+      // swipe-down по самому sheet → закрити (як нативний iOS sheet)
+      const sheet = m.querySelector(".sheet");
+      if (sheet) setupSheetSwipeDown(m, sheet);
+    });
+  }
+
+  // Нативний iOS-жест: swipe-down по заголовку sheet → закрити модал
+  function setupSheetSwipeDown(modal, sheet) {
+    const handle = sheet.querySelector(".sheet-handle") || sheet;
+    let startY = 0, currentY = 0, dragging = false;
+
+    handle.addEventListener("touchstart", (e) => {
+      const t = e.touches[0];
+      startY = t.clientY;
+      dragging = true;
+      sheet.style.transition = "none";
+    }, { passive: true });
+
+    handle.addEventListener("touchmove", (e) => {
+      if (!dragging) return;
+      const t = e.touches[0];
+      currentY = t.clientY - startY;
+      if (currentY > 0) {
+        sheet.style.transform = "translateY(" + currentY + "px)";
+        // затемнення фону пропорційно зсуву
+        modal.style.background = "rgba(0,0,0," + Math.max(0.1, 0.5 - currentY / 600) + ")";
+      }
+    }, { passive: true });
+
+    handle.addEventListener("touchend", () => {
+      if (!dragging) return;
+      dragging = false;
+      sheet.style.transition = "";
+      if (currentY > 100) {
+        // достатній зсув → закрити
+        modal.classList.add("hidden");
+      }
+      // скинути трансформ
+      sheet.style.transform = "";
+      modal.style.background = "";
+      currentY = 0;
     });
   }
 
