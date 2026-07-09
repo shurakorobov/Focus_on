@@ -263,7 +263,11 @@
         this.render();
         this.applyPermissions();
       } catch (e) {
-        $("#track-list").innerHTML = '<div class="hint-inline">Не вдалося завантажити треки</div>';
+        console.error("Music.load помилка:", e);
+        const msg = e.status === 401
+          ? "Потрібна авторизація — відкрийте через бота"
+          : "Не вдалося завантажити треки";
+        $("#track-list").innerHTML = '<div class="hint-inline">' + msg + (e.message ? " (" + e.message + ")" : "") + "</div>";
       }
     },
 

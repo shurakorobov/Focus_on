@@ -17,24 +17,16 @@ const API = (() => {
     const headers = {};
     const opts = { method, headers };
 
+    // Авторизація завжди через заголовок (надійніше за query-параметр —
+    // initData довгий і може обрізатись проксі)
+    const id = getInitData();
+    if (id) headers["Authorization"] = "Bearer " + id;
+
     if (json !== undefined) {
       headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(json);
-      // initData вставляємо у заголовок авторизації
-      const id = getInitData();
-      if (id) headers["Authorization"] = "Bearer " + id;
     } else if (body) {
-      // для FormData (завантаження) — додаємо initData у formData
-      const id = getInitData();
-      if (id) body.append("init_data", id);
       opts.body = body;
-    } else {
-      // GET-запити: initData у query
-      const id = getInitData();
-      if (id) {
-        const sep = path.includes("?") ? "&" : "?";
-        path = path + sep + "init_data=" + encodeURIComponent(id);
-      }
     }
 
     let url = path;
