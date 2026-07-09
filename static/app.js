@@ -232,7 +232,11 @@
     setFabIcon(true);
     $("#phase-label").textContent = "У фокусі · тап для паузи";
     haptic("light");
-    // запускаємо музику, якщо обраний трек
+    // якщо трек не обраний — обираємо перший доступний (закріплений → бажаний → демо)
+    if (!state.selectedTrack) {
+      state.selectedTrack = Music.pickDefaultTrack();
+    }
+    // запускаємо музику
     if (state.selectedTrack) {
       Music.playForTimer(state.selectedTrack);
     }
@@ -786,6 +790,29 @@
         const t = el._trackData;
         if (t) this._applyPlayState(el, t);
       });
+    },
+
+    // Обрати трек за замовчуванням для запуску таймера.
+    // Пріоритет: закріплений → бажаний → демо (пріоритет аудіо для кешу/фону)
+    pickDefaultTrack() {
+      const all = [
+        ...(this.data.demo || []),
+        ...(this.data.tracks || []),
+      ];
+      if (!all.length) return null;
+      // фільтр за категорією якщо вибрана не 'all'
+      const cat = state.category;
+      let pool = (cat && cat !== "all") ? all.filter((t) => (t.category || "other") === cat) : all;
+      if (!pool.length) pool = all;
+      // пріоритет: pinned → favorite → аудіо (краще для кешу/фону) → перший
+      return (
+        pool.find((t) => t.is_pinned && t.kind !== "youtube") ||
+        pool.find((t) => t.is_pinned) ||
+        pool.find((t) => t.is_favorite && t.kind !== "youtube") ||
+        pool.find((t) => t.is_favorite) ||
+        pool.find((t) => t.kind !== "youtube") ||
+        pool[0]
+      );
     },
 
     // ---------- Жести для треку ----------
@@ -1426,56 +1453,64 @@
     let pressTimer = null;
     let longPressed = false;
     let touchStartX = 0, touchStartY = 0;
+    let lastInput = 0; // тип останнього вводу: щоб уникнути подвійної обробки touch+mouse
 
-    wrap.addEventListener("touchstart", (e) => {
-      longPressed = false;
-      const t = e.touches[0];
-      touchStartX = t.clientX;
-      touchStartY = t.clientY;
-      // запускаємо таймер довгого натискання (700мс)
+    function startPressTimer() {
+      clearTimeout(pressTimer);
       pressTimer = setTimeout(() => {
         longPressed = true;
         wrap.classList.add("stopping");
         stop();
         haptic("med");
       }, 700);
+    }
+
+    function endPress() {
+      clearTimeout(pressTimer);
+      wrap.classList.remove("stopping");
+      if (!longPressed) {
+        toggleTimer();
+      }
+      longPressed = false;
+    }
+
+    // TOUCH — основний інпут на мобільних
+    wrap.addEventListener("touchstart", (e) => {
+      longPressed = false;
+      lastInput = "touch";
+      const t = e.touches[0];
+      touchStartX = t.clientX;
+      touchStartY = t.clientY;
+      startPressTimer();
     }, { passive: true });
 
     wrap.addEventListener("touchmove", (e) => {
       const t = e.touches[0];
       const dx = Math.abs(t.clientX - touchStartX);
       const dy = Math.abs(t.clientY - touchStartY);
-      // якщо палець зсунувся — скасовуємо long-press
       if (dx > 10 || dy > 10) {
         clearTimeout(pressTimer);
         wrap.classList.remove("stopping");
       }
     }, { passive: true });
 
-    function endPress(e) {
-      clearTimeout(pressTimer);
-      wrap.classList.remove("stopping");
-      if (!longPressed) {
-        // короткий тап — play/pause
-        toggleTimer();
-      }
-      longPressed = false;
-    }
-    wrap.addEventListener("touchend", endPress);
-    // fallback для миші (тестування в браузері)
-    let mouseTimer = null;
-    let mouseLong = false;
+    wrap.addEventListener("touchend", (e) => {
+      // блокуємо синтетичний mouse-клік після touch
+      endPress();
+    });
+
+    // MOUSE — лише десктоп (touch-пристрої ігнорують, бо lastInput=touch)
     wrap.addEventListener("mousedown", (e) => {
-      if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
-      mouseLong = false;
-      mouseTimer = setTimeout(() => { mouseLong = true; stop(); }, 700);
+      // якщо це синтетичний клік від touch — ігноруємо
+      if (lastInput === "touch") return;
+      longPressed = false;
+      startPressTimer();
     });
     wrap.addEventListener("mouseup", (e) => {
-      if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
-      clearTimeout(mouseTimer);
-      if (!mouseLong) toggleTimer();
+      if (lastInput === "touch") return;
+      endPress();
     });
-    wrap.addEventListener("mouseleave", () => { clearTimeout(mouseTimer); });
+    wrap.addEventListener("mouseleave", () => { clearTimeout(pressTimer); });
   }
 
   // ---------- Аудіо-елемент: реакція на завершення/помилки ----------
@@ -1551,6 +1586,8 @@
     setFabIcon(false);
     renderTimer();
     await loadProfile();
+    // передзавантажуємо список треків, щоб pickDefaultTrack мав дані
+    Music.load().catch(() => {});
   }
 
   // ---------- Автолог крашів та аномалій ----------

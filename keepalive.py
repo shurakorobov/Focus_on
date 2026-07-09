@@ -38,7 +38,11 @@ async def keepalive_loop() -> None:
     «розбудить» Render навіть якщо він уже заснув. Запит до localhost лише
     підтримує активність усередині вже живого процесу.
     """
-    public_url = os.getenv("WEBAPP_URL", "").rstrip("/")
+    # пріоритет публічних URL: WEBAPP_URL, потім RENDER_EXTERNAL_URL (авто від Render)
+    public_url = (
+        os.getenv("WEBAPP_URL", "").rstrip("/")
+        or os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    )
     port = os.getenv("PORT", "8000")
     local_url = f"http://127.0.0.1:{port}"
 
