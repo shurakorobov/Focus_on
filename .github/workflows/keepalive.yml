@@ -1,0 +1,34 @@
+# Зовнішній пінг щоб Render не засинав.
+# GitHub Actions cron б'є по публічному URL кожні 5 хв — це ЗОВНІШНІЙ запит,
+# який Render рахує як активність і не присипляє сервіс.
+# Внутрішній keepalive.py фізично не може цього зробити: коли процес зупинено,
+# зупиняється і він сам.
+name: Keepalive Render
+
+on:
+  schedule:
+    # кожні 5 хв (мінімум для GitHub Actions cron)
+    - cron: "*/5 * * * *"
+  # ручний запуск для тесту
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render
+        run: |
+          URL="https://focus-on.onrender.com/api/health"
+          echo "Пінг $URL ..."
+          # 3 спроби з інтервалом
+          for i in 1 2 3; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -m 60 "$URL" || echo "000")
+            echo "Спроба $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Render активний"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "✗ Render не відповів за 3 спроби"
+          exit 1
