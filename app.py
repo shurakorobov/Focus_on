@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
@@ -26,8 +27,12 @@ STATIC_DIR = BASE_DIR / "static"
 async def lifespan(app: FastAPI):
     """Життєвий цикл: запускаємо фонові задачі при старті."""
     import asyncio
+    import logging
     from keepalive import keepalive_loop
 
+    logging.basicConfig(level=logging.INFO)
+    logging.info("🚀 Focus OS стартує... PORT=%s WEBAPP_URL=%s",
+                 os.getenv("PORT"), os.getenv("WEBAPP_URL", "(не задано)"))
     task = asyncio.create_task(keepalive_loop())
     yield
     task.cancel()
