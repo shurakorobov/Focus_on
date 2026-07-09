@@ -842,8 +842,8 @@
       const favCls = t.is_favorite ? " active" : "";
       const pinCls = t.is_pinned ? " active" : "";
       // CSS-клас арт-іконки за типом джерела
-      const artCls = isYt ? " yt" : (t.kind === "soundcloud" ? " sc" : (t.kind === "spotify" ? " sp" : ""));
-      const sourceLabel = isYt ? "YouTube" : (t.kind === "soundcloud" ? "SoundCloud" : (t.kind === "spotify" ? "Spotify" : ""));
+      const artCls = isYt ? " yt" : (t.kind === "soundcloud" ? " sc" : (t.kind === "spotify" ? " sp" : (t.kind === "apple_music" ? " am" : "")));
+      const sourceLabel = isYt ? "YouTube" : (t.kind === "soundcloud" ? "SoundCloud" : (t.kind === "spotify" ? "Spotify" : (t.kind === "apple_music" ? "Apple Music" : "")));
       // іконки play/pause перемикаються CSS-класом .playing + .paused
       inner.innerHTML =
         '<div class="track-art' + artCls + '" data-act="play">' +
@@ -1157,8 +1157,9 @@
       state.playerPlaying = true;
       this._refreshPlayStates();
 
-      // embedding-based джерела: YouTube, SoundCloud, Spotify
-      if ((t.kind === "youtube" || t.kind === "soundcloud" || t.kind === "spotify") && t.embed_url) {
+      // embedding-based джерела: YouTube, SoundCloud, Spotify, Apple Music
+      const EMBEDDABLE = ["youtube", "soundcloud", "spotify", "apple_music"];
+      if (EMBEDDABLE.includes(t.kind) && t.embed_url) {
         const c = $("#yt-container");
         c.classList.remove("hidden");
         let src = t.embed_url;
@@ -1170,6 +1171,8 @@
         this._setupMediaSession(t);
         if (t.kind === "spotify") {
           toast("Spotify: 30-сек прев’ю. Повний трек — з входом в акаунт.");
+        } else if (t.kind === "apple_music") {
+          toast("Apple Music: потрібна підписка для повного треку.");
         }
         haptic("light");
       } else {
@@ -1272,7 +1275,8 @@
       const artist = t.author || (
         t.kind === "youtube" ? "YouTube" :
         t.kind === "soundcloud" ? "SoundCloud" :
-        t.kind === "spotify" ? "Spotify" : "Focus OS"
+        t.kind === "spotify" ? "Spotify" :
+        t.kind === "apple_music" ? "Apple Music" : "Focus OS"
       );
       try {
         navigator.mediaSession.metadata = new MediaMetadata({

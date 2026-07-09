@@ -127,6 +127,8 @@ def classify_url(url: str) -> str:
         return "soundcloud"
     if "spotify.com" in u or "spotify.link" in u:
         return "spotify"
+    if "music.apple.com" in u:
+        return "apple_music"
     return "audio"
 
 
@@ -151,6 +153,16 @@ def spotify_embed_url(url: str) -> str:
         path,
     )
     return embed_url
+
+
+def apple_music_embed_url(url: str) -> str:
+    """Apple Music embed iframe-URL.
+    Замінює music.apple.com → embed.music.apple.com у шляху.
+    Приймає повний URL: music.apple.com/<country>/album/<slug>/<id>?i=<track_id>
+    """
+    # прибираємо query (?i=...), бо embed працює з path-ID
+    path = url.split("?")[0]
+    return path.replace("music.apple.com", "embed.music.apple.com")
 
 
 def youtube_playlist_id(url: str) -> str:
@@ -335,4 +347,10 @@ async def fetch_spotify_info(client: "httpx.AsyncClient", url: str) -> dict:
             return {"title": title, "author": ""}
     except Exception:
         pass
+    return {"title": "", "author": ""}
+
+
+async def fetch_apple_music_info(client: "httpx.AsyncClient", url: str) -> dict:
+    """Apple Music не має публічного oEmbed API, а сторінки рендеряться через JS.
+    Тому назва/виконавець не підтягуються автоматично — користувач вводить вручну."""
     return {"title": "", "author": ""}

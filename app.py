@@ -379,6 +379,8 @@ async def api_list_tracks(
             t["embed_url"] = storage.soundcloud_embed_url(t["url"])
         elif t["kind"] == "spotify":
             t["embed_url"] = storage.spotify_embed_url(t["url"])
+        elif t["kind"] == "apple_music":
+            t["embed_url"] = storage.apple_music_embed_url(t["url"])
         elif base and t["url"].startswith("/"):
             t["url"] = base + t["url"]
     is_admin = settings.is_admin(user["id"])
@@ -426,6 +428,8 @@ async def api_add_track_url(
                     info = await storage.fetch_soundcloud_info(client, payload.url)
                 elif kind == "spotify":
                     info = await storage.fetch_spotify_info(client, payload.url)
+                elif kind == "apple_music":
+                    info = await storage.fetch_apple_music_info(client, payload.url)
                 else:
                     info = {"title": "", "author": ""}
                 if info.get("title"):
