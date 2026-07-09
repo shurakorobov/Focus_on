@@ -684,15 +684,25 @@ async def _process_stars_payment(sp: dict, chat_id: int) -> None:
     stars = int(sp.get("total_amount", 0) or 0)  # в XTR
     currency = sp.get("currency", "XTR")
     tg_id = chat_id
+    from_user = sp.get("from") or {}
+    first_name = from_user.get("first_name", "")
+    username = from_user.get("username")
+
+    # ім'я + клікабельне посилання на профіль користувача
+    name_line = first_name or "Без імені"
+    if username:
+        name_line += f' · <a href="https://t.me/{username}">@{username}</a>'
+    profile_link = f'<a href="tg://user?id={tg_id}">Профіль</a>'
 
     db.record_payment(tg_id, order_id, stars, "success", raw=str(sp))
     expires = db.set_user_plan(tg_id, "premium", days=settings.PREMIUM_DURATION_DAYS)
     await _notify_admin(
-        f"⭐ <b>Преміум активовано (Stars)</b>\n"
-        f"Користувач: <code>{tg_id}</code>\n"
-        f"Сума: {stars} Stars\n"
-        f"Замовлення: <code>{order_id}</code>\n"
-        f"Діє до: {expires[:10] if expires else '—'}"
+        f"⭐ <b>Преміум активовано (Stars)</b>\n\n"
+        f"<b>Користувач:</b> {name_line} ({profile_link})\n"
+        f"<b>ID:</b> <code>{tg_id}</code>\n"
+        f"<b>Сума:</b> {stars} Stars\n"
+        f"<b>Замовлення:</b> <code>{order_id}</code>\n"
+        f"<b>Діє до:</b> {expires[:10] if expires else '—'}"
     )
 
 
