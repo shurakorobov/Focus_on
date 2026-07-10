@@ -104,6 +104,12 @@ const API = (() => {
     reportBug: (message, platform = "", screen = "") =>
       request("POST", "/api/bug-report", { json: { message, platform, screen } }),
 
+    // музика: статистика прослуховувань + фонове відтворення
+    recordPlay: (track_key, title = "", source = "webview", duration = 0) =>
+      request("POST", "/api/play", { json: { track_key, title, source, duration } }),
+    playInBackground: (track_key, title = "", duration = 0) =>
+      request("POST", "/api/play-in-background", { json: { track_key, title, duration } }),
+
     // для діагностики
     getInitData,
   };

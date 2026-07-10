@@ -253,11 +253,24 @@ def migrate() -> None:
                 created_at   TEXT NOT NULL
             );
 
+            -- Статистика прослуховувань треків
+            CREATE TABLE IF NOT EXISTS plays (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_id        INTEGER NOT NULL,
+                track_key    TEXT NOT NULL,
+                title        TEXT NOT NULL DEFAULT '',
+                source       TEXT NOT NULL DEFAULT '',   -- 'webview' | 'background' | 'deeplink'
+                duration     INTEGER NOT NULL DEFAULT 0,  -- скільки грає (сек), 0 = невідомо
+                created_at   TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_category ON sessions(category);
             CREATE INDEX IF NOT EXISTS idx_sessions_finished ON sessions(finished_at);
             CREATE INDEX IF NOT EXISTS idx_tracks_category ON tracks(category);
             CREATE INDEX IF NOT EXISTS idx_track_meta_tg ON track_user_meta(tg_id);
             CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);
+            CREATE INDEX IF NOT EXISTS idx_plays_tg ON plays(tg_id);
+            CREATE INDEX IF NOT EXISTS idx_plays_track ON plays(track_key);
             """
         )
 
@@ -899,6 +912,55 @@ def record_payment(
         return _last_id(conn, cur, "payments")
 
 
+# ------------------------------ статистика прослуховувань -------------------
+
+
+def record_play(
+    tg_id: int, track_key: str, title: str = "", source: str = "webview", duration: int = 0
+) -> int:
+    """Записує факт прослуховування треку."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO plays (tg_id, track_key, title, source, duration, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (tg_id, track_key, title, source, duration, datetime.now(timezone.utc).isoformat()),
+        )
+        return _last_id(conn, cur, "plays")
+
+
+def get_play_stats(tg_id: int | None = None, limit: int = 20) -> dict:
+    """Статистика прослуховувань для користувача або загальна (tg_id=None)."""
+    with get_conn() as conn:
+        if tg_id:
+            total = conn.execute(
+                "SELECT COUNT(*) AS c FROM plays WHERE tg_id = ?", (tg_id,)
+            ).fetchone()["c"]
+            recent = conn.execute(
+                "SELECT track_key, title, source, created_at FROM plays WHERE tg_id = ? ORDER BY created_at DESC LIMIT ?",
+                (tg_id, limit),
+            ).fetchall()
+            by_source = conn.execute(
+                "SELECT source, COUNT(*) AS c FROM plays WHERE tg_id = ? GROUP BY source",
+                (tg_id,),
+            ).fetchall()
+        else:
+            total = conn.execute("SELECT COUNT(*) AS c FROM plays").fetchone()["c"]
+            recent = conn.execute(
+                "SELECT track_key, title, source, created_at FROM plays ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            by_source = conn.execute(
+                "SELECT source, COUNT(*) AS c FROM plays GROUP BY source"
+            ).fetchall()
+    return {
+        "total": int(total),
+        "recent": [dict(r) for r in recent],
+        "by_source": [dict(r) for r in by_source],
+    }
+
+
 # ------------------------------ адмін-статистика ----------------------------
 
 
@@ -1020,6 +1082,17 @@ def get_admin_stats() -> dict:
             "SELECT COUNT(*) AS c FROM bug_reports"
         ).fetchone()["c"]
 
+        # прослуховування
+        plays_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM plays"
+        ).fetchone()["c"]
+        plays_by_source = conn.execute(
+            "SELECT source, COUNT(*) AS c FROM plays GROUP BY source"
+        ).fetchall()
+        top_tracks = conn.execute(
+            "SELECT title, COUNT(*) AS c FROM plays GROUP BY track_key ORDER BY c DESC LIMIT 5"
+        ).fetchall()
+
     return {
         "users": {
             "total": total_users,
@@ -1049,6 +1122,11 @@ def get_admin_stats() -> dict:
             "revenue_uah": revenue_uah,
         },
         "bug_reports": bugs_row,
+        "plays": {
+            "total": int(plays_row),
+            "by_source": [dict(r) for r in plays_by_source],
+            "top_tracks": [dict(r) for r in top_tracks],
+        },
         "categories": CATEGORIES,
         "modes": FOCUS_MODES,
     }

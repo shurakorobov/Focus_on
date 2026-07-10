@@ -786,6 +786,71 @@ async def api_admin_stats(user: dict = Depends(current_user)):
     return db.get_admin_stats()
 
 
+# ------------------------------ музика у фоні + статистика ------------------
+
+
+class PlayTrackReq(BaseModel):
+    track_key: str
+    title: str = ""
+    source: str = "webview"
+    duration: int = 0
+
+
+@app.post("/api/play")
+async def api_play(payload: PlayTrackReq, user: dict = Depends(current_user)):
+    """Записує факт прослуховування треку (статистика)."""
+    _ensure_user_exists(user)
+    db.record_play(user["id"], payload.track_key, payload.title, payload.source, payload.duration)
+    return {"ok": True}
+
+
+@app.post("/api/play-in-background")
+async def api_play_in_background(payload: PlayTrackReq, user: dict = Depends(current_user)):
+    """Відправляє аудіо в чат через sendAudio для фонового відтворення.
+    Працює лише для прямих аудіо-URL (mp3/wav). Для embed-джерел клієнт
+    використовує deep link до нативного плеєра."""
+    _ensure_user_exists(user)
+    db.record_play(user["id"], payload.track_key, payload.title, "background", payload.duration)
+    # шукаємо URL треку за track_key
+    # track_key формат: 'demo:<id>' або 'db:<id>'
+    try:
+        track_id = int(payload.track_key.split(":")[1])
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="невірний track_key")
+    # отримуємо URL з БД
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT url, kind, title FROM tracks WHERE id = ?", (track_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="трек не знайдено")
+    if row["kind"] != "audio":
+        raise HTTPException(status_code=400, detail="фонове відтворення лише для прямих аудіо-URL")
+    url = row["url"]
+    title = row["title"] or payload.title or "Focus OS"
+    # sendAudio через Bot API — Telegram сам завантажить і відправить в чат
+    if not settings.has_token:
+        raise HTTPException(status_code=400, detail="бот не налаштований")
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendAudio",
+                json={
+                    "chat_id": user["id"],
+                    "audio": url,
+                    "title": title[:100],
+                    "caption": "🎵 " + title + " — Focus OS",
+                },
+            )
+            data = r.json()
+            if data.get("ok"):
+                return {"ok": True, "sent": True}
+            else:
+                return {"ok": True, "sent": False, "error": data.get("description", "")}
+    except Exception as e:
+        return {"ok": True, "sent": False, "error": str(e)}
+
+
 # ------------------------------ баг-репорти ---------------------------------
 
 

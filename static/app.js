@@ -1285,6 +1285,41 @@
       this.play(t);
     },
 
+    // Усі треки плоским списком (для автоплей)
+    allTracks() {
+      return [
+        ...(this.data.demo || []),
+        ...(this.data.tracks || []),
+      ];
+    },
+
+    // Автовідтворення наступного треку з тієї ж категорії
+    playNextInCategory() {
+      const all = this.allTracks();
+      if (!all.length || !state.currentTrack) {
+        this.stopAudio(true);
+        return;
+      }
+      const cat = state.currentTrack.category || "other";
+      // фільтр по тій же категорії
+      let pool = all.filter((t) => (t.category || "other") === cat);
+      if (!pool.length) pool = all;
+      // знайти індекс поточного
+      const idx = pool.findIndex((t) => t.track_key === state.currentTrack.track_key);
+      if (idx === -1) {
+        this.stopAudio(true);
+        return;
+      }
+      // наступний (по колу)
+      const next = pool[(idx + 1) % pool.length];
+      if (next.track_key === state.currentTrack.track_key) {
+        // лише один трек — граємо знову
+        this.play(next);
+      } else {
+        this.play(next);
+      }
+    },
+
     pauseAudio() {
       this.pause();
     },
@@ -1726,9 +1761,9 @@
   // ---------- Аудіо-елемент: реакція на завершення/помилки ----------
   function setupAudioEvents() {
     const audio = $("#audio-el");
-    // трек закінчився — скинути активний стан
+    // трек закінчився — граємо наступний з тієї ж категорії
     audio.addEventListener("ended", () => {
-      Music.stopAudio(true);
+      Music.playNextInCategory();
     });
     audio.addEventListener("error", () => {
       if (state.currentTrack) {
