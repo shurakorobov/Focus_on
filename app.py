@@ -856,6 +856,7 @@ async def api_admin_stats_stream(request: Request):
     if not user or not settings.is_admin(user["id"]):
         raise HTTPException(status_code=403, detail="admin only")
 
+    from fastapi.encoders import jsonable_encoder
     import json
 
     async def event_generator():
@@ -863,7 +864,7 @@ async def api_admin_stats_stream(request: Request):
         _admin_subscribers.add(queue)
         try:
             # перший пуш — одразу
-            yield f"data: {json.dumps(db.get_admin_stats())}\n\n"
+            yield f"data: {json.dumps(jsonable_encoder(db.get_admin_stats()))}\n\n"
             while True:
                 if await request.is_disconnected():
                     break
@@ -874,7 +875,7 @@ async def api_admin_stats_stream(request: Request):
                     yield ": ping\n\n"
                     continue
                 # нові дані
-                yield f"data: {json.dumps(db.get_admin_stats())}\n\n"
+                yield f"data: {json.dumps(jsonable_encoder(db.get_admin_stats()))}\n\n"
         finally:
             _admin_subscribers.discard(queue)
 
