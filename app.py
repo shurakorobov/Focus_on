@@ -89,6 +89,30 @@ async def disable_caching(request: Request, call_next):
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+# ---------------------- Глобальний обробник помилок -------------------------
+import logging
+import traceback as _tb
+
+_err_logger = logging.getLogger("focus.errors")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Логує будь-яку непійману помилку з повним traceback → діагностика 500."""
+    tb = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+    path = request.url.path
+    _err_logger.error("UNHANDLED on %s: %s\n%s", path, exc, tb)
+    # також шлємо адміну коротке повідомлення (не спамити — лише 5xx)
+    try:
+        await _notify_admin(f"🔥 <b>Помилка 500</b> на <code>{path}</code>\n<pre>{str(exc)[:500]}</pre>")
+    except Exception:
+        pass
+    return JSONResponse(
+        {"detail": str(exc), "type": type(exc).__name__},
+        status_code=500,
+    )
+
+
 # ------------------------------ авторизація ---------------------------------
 
 
