@@ -110,6 +110,15 @@ const API = (() => {
     playInBackground: (track_key, title = "", duration = 0) =>
       request("POST", "/api/play-in-background", { json: { track_key, title, duration } }),
 
+    // промокоди
+    redeem: (code) =>
+      request("POST", "/api/redeem", { json: { code } }),
+    listPromoCodes: () => request("GET", "/api/admin/promo-codes"),
+    createPromoCode: (code, days, max_uses) =>
+      request("POST", "/api/admin/promo-codes", { json: { code, days, max_uses } }),
+    deletePromoCode: (code) =>
+      request("DELETE", "/api/admin/promo-codes/" + encodeURIComponent(code)),
+
     // для діагностики
     getInitData,
   };

@@ -305,11 +305,47 @@
       if (data.is_admin) {
         $("#admin-dashboard").classList.remove("hidden");
         loadAdminStats();
+        loadPromoCodes();
       } else {
         $("#admin-dashboard").classList.add("hidden");
       }
     } catch (e) {
       $("#profile-head").innerHTML = '<div class="hint-inline">Не вдалося завантажити профіль</div>';
+    }
+  }
+
+  // ---------- Адмін: промокоди ----------
+  async function loadPromoCodes() {
+    const el = $("#promo-list");
+    if (!el) return;
+    try {
+      const d = await API.listPromoCodes();
+      const codes = d.codes || [];
+      if (!codes.length) {
+        el.innerHTML = '<div class="hint-inline">Поки немає промокодів</div>';
+        return;
+      }
+      el.innerHTML = codes.map((c) =>
+        '<div class="promo-row">' +
+          '<span class="promo-code-val">' + escapeHtml(c.code) + '</span>' +
+          '<span class="promo-info">' + c.days + 'д · ' + c.used_count + (c.max_uses > 0 ? '/' + c.max_uses : '') + '</span>' +
+          '<button class="promo-del" data-code="' + escapeHtml(c.code) + '">✕</button>' +
+        '</div>'
+      ).join("");
+      // кнопки видалення
+      el.querySelectorAll(".promo-del").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const code = btn.dataset.code;
+          btn.disabled = true;
+          try {
+            await API.deletePromoCode(code);
+            toast("Код видалено");
+            loadPromoCodes();
+          } catch (e) { toast("Не вдалось"); }
+        });
+      });
+    } catch (e) {
+      el.innerHTML = '<div class="hint-inline">Не вдалось завантажити</div>';
     }
   }
 
@@ -1603,6 +1639,50 @@
       const url = "https://t.me/focuson_on_bot";
       if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
       else window.open(url, "_blank");
+    });
+
+    // промокод — активувати (юзер)
+    $("#btn-redeem").addEventListener("click", async () => {
+      const code = $("#promo-input").value.trim();
+      if (!code) { toast("Введи промокод"); return; }
+      const btn = $("#btn-redeem");
+      btn.disabled = true; btn.textContent = "Активую…";
+      try {
+        const res = await API.redeem(code);
+        if (res.ok) {
+          toast("⭐ Преміум активовано на " + res.days + " днів!");
+          haptic("success");
+          $("#promo-input").value = "";
+          await loadProfile();
+        } else {
+          toast(res.error || "Невірний код");
+        }
+      } catch (e) {
+        toast(e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = "Активувати";
+      }
+    });
+
+    // промокод — створити (адмін)
+    const cpBtn = $("#btn-create-promo");
+    if (cpBtn) cpBtn.addEventListener("click", async () => {
+      const code = $("#promo-code-input").value.trim();
+      const days = parseInt($("#promo-days-input").value) || 30;
+      const max_uses = parseInt($("#promo-max-input").value) || 0;
+      if (!code) { toast("Введи код"); return; }
+      cpBtn.disabled = true;
+      try {
+        const res = await API.createPromoCode(code, days, max_uses);
+        if (res.ok) {
+          toast("Код " + code.toUpperCase() + " створено");
+          $("#promo-code-input").value = "";
+          loadPromoCodes();
+        } else {
+          toast(res.error || "Не вдалось");
+        }
+      } catch (e) { toast(e.message); }
+      finally { cpBtn.disabled = false; }
     });
 
     // чіпи категорій на таймері

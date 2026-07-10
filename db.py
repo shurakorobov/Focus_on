@@ -259,9 +259,27 @@ def migrate() -> None:
                 tg_id        INTEGER NOT NULL,
                 track_key    TEXT NOT NULL,
                 title        TEXT NOT NULL DEFAULT '',
-                source       TEXT NOT NULL DEFAULT '',   -- 'webview' | 'background' | 'deeplink'
-                duration     INTEGER NOT NULL DEFAULT 0,  -- скільки грає (сек), 0 = невідомо
+                source       TEXT NOT NULL DEFAULT '',
+                duration     INTEGER NOT NULL DEFAULT 0,
                 created_at   TEXT NOT NULL
+            );
+
+            -- Промокоди
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code         TEXT PRIMARY KEY,
+                days         INTEGER NOT NULL DEFAULT 30,
+                max_uses     INTEGER NOT NULL DEFAULT 0,    -- 0 = безліміт
+                used_count   INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL,
+                created_by   BIGINT NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS promo_uses (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                code         TEXT NOT NULL,
+                tg_id        BIGINT NOT NULL,
+                used_at      TEXT NOT NULL,
+                UNIQUE(code, tg_id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_sessions_category ON sessions(category);
@@ -961,6 +979,76 @@ def get_play_stats(tg_id: int | None = None, limit: int = 20) -> dict:
     }
 
 
+# ------------------------------ промокоди ----------------------------------
+
+
+def redeem_promo_code(tg_id: int, code: str) -> dict:
+    """Активує промокод для користувача. Повертає {ok, days, error?}."""
+    code = (code or "").strip().upper()
+    if not code:
+        return {"ok": False, "error": "Введи код"}
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        promo = conn.execute(
+            "SELECT code, days, max_uses, used_count FROM promo_codes WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if not promo:
+            return {"ok": False, "error": "Невірний код"}
+        if promo["max_uses"] > 0 and promo["used_count"] >= promo["max_uses"]:
+            return {"ok": False, "error": "Код вичерпано"}
+        already = conn.execute(
+            "SELECT 1 FROM promo_uses WHERE code = ? AND tg_id = ?", (code, tg_id)
+        ).fetchone()
+        if already:
+            return {"ok": False, "error": "Вже активовано"}
+        # активуємо
+        conn.execute(
+            "INSERT INTO promo_uses (code, tg_id, used_at) VALUES (?, ?, ?)",
+            (code, tg_id, now),
+        )
+        conn.execute(
+            "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = ?",
+            (code,),
+        )
+    expires = set_user_plan(tg_id, "premium", days=promo["days"])
+    return {"ok": True, "days": promo["days"], "expires": expires}
+
+
+def add_promo_code(code: str, days: int, max_uses: int, created_by: int) -> dict:
+    """Створює промокод (адмін). Повертає {ok, error?}."""
+    code = (code or "").strip().upper()
+    if not code or len(code) < 3:
+        return {"ok": False, "error": "Код закороткий (мін 3 символи)"}
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM promo_codes WHERE code = ?", (code,)
+        ).fetchone()
+        if exists:
+            return {"ok": False, "error": "Код вже існує"}
+        conn.execute(
+            "INSERT INTO promo_codes (code, days, max_uses, used_count, created_at, created_by) VALUES (?, ?, ?, 0, ?, ?)",
+            (code, days, max_uses, now, created_by),
+        )
+    return {"ok": True}
+
+
+def delete_promo_code(code: str) -> bool:
+    code = (code or "").strip().upper()
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM promo_codes WHERE code = ?", (code,))
+        return cur.rowcount > 0
+
+
+def list_promo_codes() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT code, days, max_uses, used_count, created_at FROM promo_codes ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ------------------------------ адмін-статистика ----------------------------
 
 
@@ -1090,7 +1178,7 @@ def get_admin_stats() -> dict:
             "SELECT source, COUNT(*) AS c FROM plays GROUP BY source"
         ).fetchall()
         top_tracks = conn.execute(
-            "SELECT title, COUNT(*) AS c FROM plays GROUP BY track_key ORDER BY c DESC LIMIT 5"
+            "SELECT MAX(title) AS title, COUNT(*) AS c FROM plays GROUP BY track_key ORDER BY c DESC LIMIT 5"
         ).fetchall()
 
     return {

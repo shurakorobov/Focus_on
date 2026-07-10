@@ -226,6 +226,16 @@ class GrantPremium(BaseModel):
     days: int = Field(settings.PREMIUM_DURATION_DAYS, gt=0, le=3650)
 
 
+class RedeemCode(BaseModel):
+    code: str = Field(..., min_length=1, max_length=50)
+
+
+class PromoCodeReq(BaseModel):
+    code: str = Field(..., min_length=3, max_length=50)
+    days: int = Field(30, gt=0, le=3650)
+    max_uses: int = Field(0, ge=0)
+
+
 # ------------------------------ API -----------------------------------------
 
 
@@ -776,6 +786,40 @@ async def api_grant_premium(
         raise HTTPException(status_code=403, detail="admin only")
     expires = db.set_user_plan(payload.tg_id, "premium", days=payload.days)
     return {"ok": True, "tg_id": payload.tg_id, "plan": "premium", "plan_expires_at": expires}
+
+
+@app.post("/api/redeem")
+async def api_redeem(payload: RedeemCode, user: dict = Depends(current_user)):
+    """Активує промокод для користувача."""
+    _ensure_user_exists(user)
+    result = db.redeem_promo_code(user["id"], payload.code)
+    return result
+
+
+@app.get("/api/admin/promo-codes")
+async def api_list_promo(user: dict = Depends(current_user)):
+    """Список промокодів (тільки адмін)."""
+    if not settings.is_admin(user["id"]):
+        raise HTTPException(status_code=403, detail="admin only")
+    return {"codes": db.list_promo_codes()}
+
+
+@app.post("/api/admin/promo-codes")
+async def api_create_promo(payload: PromoCodeReq, user: dict = Depends(current_user)):
+    """Створити промокод (тільки адмін)."""
+    if not settings.is_admin(user["id"]):
+        raise HTTPException(status_code=403, detail="admin only")
+    result = db.add_promo_code(payload.code, payload.days, payload.max_uses, user["id"])
+    return result
+
+
+@app.delete("/api/admin/promo-codes/{code}")
+async def api_delete_promo(code: str, user: dict = Depends(current_user)):
+    """Видалити промокод (тільки адмін)."""
+    if not settings.is_admin(user["id"]):
+        raise HTTPException(status_code=403, detail="admin only")
+    ok = db.delete_promo_code(code)
+    return {"ok": ok}
 
 
 @app.get("/api/admin/stats")

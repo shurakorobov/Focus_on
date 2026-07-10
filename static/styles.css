@@ -779,6 +779,27 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   margin-top: 20px;
 }
 
+/* ===== Промокоди ===== */
+#promo-section { display: flex; gap: 10px; flex-direction: column; }
+#promo-input, #promo-code-input {
+  width: 100%;
+  padding: 12px 14px; font-size: 16px;
+  border: 1px solid var(--separator); border-radius: var(--radius);
+}
+.promo-admin-row { display: flex; gap: 8px; }
+.promo-admin-row input { flex: 1; min-width: 0; }
+.promo-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid var(--separator);
+}
+.promo-row:last-child { border-bottom: none; }
+.promo-code-val { font-weight: 700; font-size: 16px; color: var(--accent); letter-spacing: 1px; }
+.promo-info { flex: 1; font-size: 13px; color: var(--label-2); }
+.promo-del {
+  background: none; border: none; color: var(--red);
+  font-size: 18px; cursor: pointer; padding: 4px 8px;
+}
+
 /* ===== Преміум-блок / Paywall ===== */
 .premium-block { margin-top: 8px; padding-bottom: 20px; }
 .paywall {

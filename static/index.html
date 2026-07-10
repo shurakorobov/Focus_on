@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#050208" />
   <title>Focus OS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260710f" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260710g" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -128,10 +128,28 @@
 
       <div class="profile-footer">Focus OS · версія 2.0</div>
 
+      <!-- ===== Промокод ===== -->
+      <h2 class="group-title">Промокод</h2>
+      <div class="profile-card" id="promo-section">
+        <input type="text" id="promo-input" placeholder="Введи промокод" autocomplete="off" maxlength="50" />
+        <button class="primary-btn" id="btn-redeem">Активувати</button>
+      </div>
+
       <!-- ===== Адмін-дашборд (видно лише адміну) ===== -->
       <div id="admin-dashboard" class="admin-dashboard hidden">
         <h2 class="group-title">🛠 Панель адміністратора</h2>
         <div class="profile-card" id="admin-stats">Завантаження…</div>
+
+        <h2 class="group-title">🎟 Промокоди</h2>
+        <div class="profile-card" id="admin-promo">
+          <input type="text" id="promo-code-input" placeholder="Код" autocomplete="off" maxlength="50" />
+          <div class="promo-admin-row">
+            <input type="number" id="promo-days-input" value="30" min="1" max="3650" placeholder="Днів" />
+            <input type="number" id="promo-max-input" value="0" min="0" placeholder="Ліміт (0=∞)" />
+          </div>
+          <button class="primary-btn" id="btn-create-promo">Створити</button>
+          <div id="promo-list"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -271,8 +289,8 @@
   <audio id="audio-el" preload="auto" playsinline webkit-playsinline></audio>
   <div id="yt-container" class="hidden"></div>
 
-  <script src="/static/api.js?v=20260710f"></script>
-  <script src="/static/cache.js?v=20260710f"></script>
-  <script src="/static/app.js?v=20260710f"></script>
+  <script src="/static/api.js?v=20260710g"></script>
+  <script src="/static/cache.js?v=20260710g"></script>
+  <script src="/static/app.js?v=20260710g"></script>
 </body>
 </html>
