@@ -754,6 +754,16 @@
 
     applyPermissions() {
       const admin = state.isAdmin;
+      // не-адмін: ховаємо весь scope-row (треки додаються в "Мої треки" = scope=user)
+      // адмін: показуємо "Для всіх" + "Демо"
+      const scopeRows = document.querySelectorAll(".scope-row");
+      scopeRows.forEach((row) => {
+        if (admin) {
+          row.classList.remove("hidden");
+        } else {
+          row.classList.add("hidden");
+        }
+      });
       $("#scope-admin-label").classList.toggle("hidden", !admin);
       $("#scope-demo-label").classList.toggle("hidden", !admin);
       $("#scope-admin-label2").classList.toggle("hidden", !admin);
@@ -781,7 +791,7 @@
       const groups = [
         { key: "pinned", title: "📌 Закріплені", items: pinned },
         { key: "fav", title: "❤️ Бажане", items: favorites },
-        { key: "collection", title: "🎵 Збірка", items: collection },
+        { key: "collection", title: "🎵 Демо", items: collection },
         { key: "user", title: "🎤 Мої треки", items: user },
       ];
 
@@ -1417,8 +1427,7 @@
         Modal.close();
         toast("Додано: " + (res.title || "трек"));
         // скидаємо фільтр категорій щоб новий трек точно був виден
-        state.musicCategory = "all";
-        buildChips($("#music-category-chips"), "all", onMusicCategory, true);
+        resetMusicCategory();
         await Music.load();
       } catch (e) {
         toast("Помилка: " + e.message);
@@ -1579,12 +1588,18 @@
     buildChips($("#timer-category-chips"), state.category, onTimerCategory);
 
     // чіпи фільтру музики
-    function onMusicCategory(k) {
-      state.musicCategory = k;
-      buildChips($("#music-category-chips"), k, onMusicCategory, true);
-      Music.load();
-    }
     buildChips($("#music-category-chips"), state.musicCategory, onMusicCategory, true);
+  }
+
+  // module-level: скидання фільтру музики після додавання треку
+  function onMusicCategory(k) {
+    state.musicCategory = k;
+    buildChips($("#music-category-chips"), k, onMusicCategory, true);
+    Music.load();
+  }
+  function resetMusicCategory() {
+    state.musicCategory = "all";
+    buildChips($("#music-category-chips"), "all", onMusicCategory, true);
   }
 
   // ---------- Тайм-пікер ----------
