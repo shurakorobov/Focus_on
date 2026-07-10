@@ -769,19 +769,20 @@
         ...(this.data.tracks || []).map((t) => ({ ...t, _group: t.scope })),
       ];
 
-      // Закріплені → Бажане → за джерелом
+      // Закріплені → Бажане → Збірка (демо+адмін разом) → Мої треки
       const pinned = all.filter((t) => t.is_pinned);
       const favorites = all.filter((t) => t.is_favorite && !t.is_pinned);
-      const demo = all.filter((t) => t._group === "demo" && !t.is_pinned && !t.is_favorite);
-      const admin = all.filter((t) => t._group === "admin" && !t.is_pinned && !t.is_favorite);
+      // Збірка = усі адмінські + демо треки (контент від адміна/системи)
+      const collection = all.filter(
+        (t) => (t._group === "demo" || t._group === "admin") && !t.is_pinned && !t.is_favorite
+      );
       const user = all.filter((t) => t._group === "user" && !t.is_pinned && !t.is_favorite);
 
       const groups = [
         { key: "pinned", title: "📌 Закріплені", items: pinned },
         { key: "fav", title: "❤️ Бажане", items: favorites },
-        { key: "demo", title: "Демо", items: demo },
-        { key: "admin", title: "Для всіх", items: admin },
-        { key: "user", title: "Мої треки", items: user },
+        { key: "collection", title: "🎵 Збірка", items: collection },
+        { key: "user", title: "🎤 Мої треки", items: user },
       ];
 
       let any = false;
@@ -800,7 +801,7 @@
       });
 
       if (!any) {
-        root.innerHTML = '<div class="hint-inline">Поки порочньо. Натисни «＋», щоб додати трек 🎵</div>';
+        root.innerHTML = '<div class="hint-inline">Поки порожньо. Натисни «＋», щоб додати трек 🎵</div>';
       }
 
       // плаваюча кнопка «додати»
@@ -844,6 +845,9 @@
       // CSS-клас арт-іконки за типом джерела
       const artCls = isYt ? " yt" : (t.kind === "soundcloud" ? " sc" : (t.kind === "spotify" ? " sp" : (t.kind === "apple_music" ? " am" : "")));
       const sourceLabel = isYt ? "YouTube" : (t.kind === "soundcloud" ? "SoundCloud" : (t.kind === "spotify" ? "Spotify" : (t.kind === "apple_music" ? "Apple Music" : "")));
+      // мітка 🛠 для адміна на admin/demo треках (inline управління)
+      const isAdminTrack = (t._group === "demo" || t._group === "admin") && state.isAdmin;
+      const adminBadge = isAdminTrack ? '<span class="admin-track-badge" title="Керує адмін">🛠</span>' : "";
       // іконки play/pause перемикаються CSS-класом .playing + .paused
       inner.innerHTML =
         '<div class="track-art' + artCls + '" data-act="play">' +
@@ -851,6 +855,7 @@
           '<span class="ico-pause"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg></span>' +
         '</div><div class="track-meta"><div class="track-title-row">' +
         '<span class="track-title">' + escapeHtml(t.title || "Без назви") + '</span>' +
+        adminBadge +
         '<span class="track-cat-badge" title="' + escapeHtml(catMeta.label) + '">' + catMeta.emoji + '</span>' +
         '</div><div class="track-author">' +
         escapeHtml(t.author || sourceLabel) +
@@ -1213,8 +1218,22 @@
     pause() {
       const audio = $("#audio-el");
       if (audio.src) audio.pause();
-      // YouTube iframe: шлємо postMessage для паузи
-      this._ytCommand("pauseVideo");
+      // embed-джерела: YouTube — postMessage; інші (SoundCloud/Spotify/Apple)
+      // не мають уніфікованого pause — зберігаємо iframe стан для resume
+      if (state.currentTrack) {
+        if (state.currentTrack.kind === "youtube") {
+          this._ytCommand("pauseVideo");
+        } else {
+          // SoundCloud/Spotify/Apple Music: прибираємо src щоб зупинити звук,
+          // зберігаємо для resume (перестворимо iframe)
+          const c = $("#yt-container");
+          const iframe = c.querySelector("iframe");
+          if (iframe) {
+            state._pausedEmbedSrc = iframe.src;
+            iframe.src = "about:blank";
+          }
+        }
+      }
       state.isPlaying = false;
       state.playerPlaying = false;
       this._refreshPlayStates();
@@ -1225,8 +1244,16 @@
     resume() {
       const audio = $("#audio-el");
       if (audio.src) audio.play().catch(() => {});
-      // YouTube iframe: шлємо postMessage для відтворення
-      this._ytCommand("playVideo");
+      if (state.currentTrack) {
+        if (state.currentTrack.kind === "youtube") {
+          this._ytCommand("playVideo");
+        } else if (state._pausedEmbedSrc) {
+          // перестворюємо iframe з збереженого src
+          const c = $("#yt-container");
+          c.innerHTML = '<iframe width="1" height="1" src="' + state._pausedEmbedSrc + '" frameborder="0" allow="autoplay; encrypted-media"></iframe>';
+          state._pausedEmbedSrc = null;
+        }
+      }
       state.isPlaying = true;
       state.playerPlaying = true;
       this._refreshPlayStates();
