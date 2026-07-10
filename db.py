@@ -133,10 +133,12 @@ def _connect_sqlite() -> sqlite3.Connection:
 
 
 def _connect_pg():
-    """Підключення до PostgreSQL через DATABASE_URL (Neon)."""
+    """Підключення до PostgreSQL через DATABASE_URL (Neon).
+    connect_timeout=30 — Neon scale-to-zero: перший запит ~5-15с на пробудження."""
     import psycopg2
     from psycopg2.extras import RealDictCursor
-    conn = psycopg2.connect(settings.DATABASE_URL, cursor_factory=RealDictCursor)
+    conn = psycopg2.connect(settings.DATABASE_URL, cursor_factory=RealDictCursor,
+                            connect_timeout=30)
     conn.autocommit = False
     return _PGWrapper(conn)
 
