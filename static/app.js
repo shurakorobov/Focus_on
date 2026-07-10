@@ -1834,49 +1834,136 @@
     buildChips($("#music-category-chips"), "all", onMusicCategory, true);
   }
 
-  // ---------- Тайм-пікер ----------
+  // ---------- Тайм-пікер (iOS wheel) ----------
+  const WHEEL_ITEM_H = 44; // має збігатись з CSS .wheel-item height
+  let _wheelState = { h: 0, m: 25, s: 0 };
+
+  // Створює одне «колесо» з інерційним перетягуванням, wheel-скролом,
+  // тапом по елементу та клавіатурою. Повертає геттер/сеттер значення.
+  function buildWheel(col) {
+    const max = parseInt(col.dataset.max);
+    const unit = col.dataset.unit;
+    const scroll = col.querySelector(".wheel-scroll");
+    const values = [];
+    for (let i = 0; i <= max; i++) values.push(i);
+
+    // заповнюємо слоти
+    scroll.innerHTML = values.map((v) =>
+      '<div class="wheel-item" data-val="' + v + '">' + String(v).padStart(2, "0") + '</div>'
+    ).join("");
+    const items = scroll.querySelectorAll(".wheel-item");
+
+    let current = 0;
+
+    function snapTo(val, animate = true) {
+      current = ((val % (max + 1)) + (max + 1)) % (max + 1);
+      if (!animate) scroll.classList.add("dragging");
+      scroll.style.transform = "translateY(" + (-current * WHEEL_ITEM_H) + "px)";
+      items.forEach((it) => it.classList.remove("center"));
+      if (items[current]) items[current].classList.add("center");
+      if (!animate) requestAnimationFrame(() => scroll.classList.remove("dragging"));
+      _wheelState[unit] = current;
+    }
+
+    // --- перетягування (touch + mouse) ---
+    let startY = 0, startVal = 0, dragging = false, lastY = 0, lastT = 0, velocity = 0, moveListener = null, upListener = null;
+
+    function onDown(y) {
+      dragging = true;
+      startY = lastY = y;
+      startVal = current;
+      lastT = performance.now();
+      velocity = 0;
+      scroll.classList.add("dragging");
+    }
+    function onMove(y) {
+      if (!dragging) return;
+      const dy = y - startY;
+      const now = performance.now();
+      velocity = (y - lastY) / Math.max(1, now - lastT);
+      lastY = y; lastT = now;
+      const offset = startVal + (-dy / WHEEL_ITEM_H);
+      scroll.style.transform = "translateY(" + (-offset * WHEEL_ITEM_H) + "px)";
+      // підсвічуємо найближчий слот у реальному часі
+      const near = ((Math.round(offset) % (max + 1)) + (max + 1)) % (max + 1);
+      items.forEach((it) => it.classList.remove("center"));
+      if (items[near]) items[near].classList.add("center");
+    }
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      scroll.classList.remove("dragging");
+      // поточна «сира» позиція з transform
+      const tr = scroll.style.transform || "";
+      const m = tr.match(/-?[\d.]+/);
+      const raw = m ? (parseFloat(m[0]) / -WHEEL_ITEM_H) : current;
+      // інерція: швидкість у px/мс × вікно → додаткові слоти
+      const flick = Math.round((velocity * 80) / WHEEL_ITEM_H);
+      snapTo(Math.round(raw) + flick, true);
+    }
+
+    // touch
+    scroll.addEventListener("touchstart", (e) => onDown(e.touches[0].clientY), { passive: true });
+    scroll.addEventListener("touchmove", (e) => onMove(e.touches[0].clientY), { passive: true });
+    scroll.addEventListener("touchend", onUp);
+    // mouse
+    scroll.addEventListener("mousedown", (e) => { e.preventDefault(); onDown(e.clientY);
+      moveListener = (ev) => onMove(ev.clientY);
+      upListener = () => { onUp(); document.removeEventListener("mousemove", moveListener); document.removeEventListener("mouseup", upListener); };
+      document.addEventListener("mousemove", moveListener);
+      document.addEventListener("mouseup", upListener);
+    });
+    // коліщатко миші (десктоп)
+    col.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      snapTo(current + (e.deltaY > 0 ? 1 : -1), true);
+    }, { passive: false });
+    // тап по елементу
+    items.forEach((it, idx) => {
+      it.addEventListener("click", () => snapTo(idx, true));
+    });
+    // клавіатура
+    col.tabIndex = 0;
+    col.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowUp") { e.preventDefault(); snapTo(current - 1, true); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); snapTo(current + 1, true); }
+    });
+
+    return {
+      get: () => current,
+      set: (v) => snapTo(v, false),
+      snap: (v) => snapTo(v, true),
+    };
+  }
+
+  let _wheels = null;
+
   function openTimePicker() {
     const h = Math.floor(state.totalSeconds / 3600);
     const m = Math.floor((state.totalSeconds % 3600) / 60);
     const s = state.totalSeconds % 60;
-    $("#pick-h").value = h;
-    $("#pick-m").value = m;
-    $("#pick-s").value = s;
+    if (!_wheels) {
+      _wheels = {};
+      $$(".wheel-col").forEach((col) => {
+        _wheels[col.dataset.unit] = buildWheel(col);
+      });
+    }
+    _wheels.h.set(h);
+    _wheels.m.set(m);
+    _wheels.s.set(s);
     $("#time-modal").classList.remove("hidden");
   }
 
   function setupTimePicker() {
     $("#btn-time-cancel").addEventListener("click", () => $("#time-modal").classList.add("hidden"));
     $("#btn-time-save").addEventListener("click", () => {
-      const h = parseInt($("#pick-h").value) || 0;
-      const m = parseInt($("#pick-m").value) || 0;
-      const s = parseInt($("#pick-s").value) || 0;
-      const total = h * 3600 + m * 60 + s;
+      const total = _wheels.h.get() * 3600 + _wheels.m.get() * 60 + _wheels.s.get();
       if (total >= 5) {
         setCustomTime(total);
         $("#time-modal").classList.add("hidden");
       } else {
         toast("Мінімум 5 секунд");
       }
-    });
-
-    // стрілки +/- год/хв/сек
-    $$(".picker-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const dir = btn.dataset.dir;
-        const delta = parseInt(btn.dataset.delta);
-        const input = $("#pick-" + dir);
-        let val = parseInt(input.value) || 0;
-        val += delta;
-        if (dir === "m" || dir === "s") {
-          if (val < 0) val = 59;
-          if (val > 59) val = 0;
-        } else {
-          if (val < 0) val = 23;
-          if (val > 23) val = 0;
-        }
-        input.value = val;
-      });
     });
 
     // пресети

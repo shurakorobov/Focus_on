@@ -84,9 +84,6 @@ body {
   max-width: 480px;
   margin: 0 auto;
   width: 100%;
-  /* body — контекст позиціонування для .fab/.add-fab, щоб вони
-     «прилипали» до колонки застосунку, а не до краю viewport на десктопі */
-  position: relative;
 }
 
 .hidden { display: none !important; }
@@ -215,9 +212,12 @@ body {
 .mode-btn.active .mode-dur { color: var(--mode-color); }
 
 /* ===== Плаваюча кнопка (FAB) ===== */
+/* position: fixed прив'язує до viewport (завжди над таббаром незалежно від
+   висоти контенту). горизонтально — по центру колонки 480px. */
 .fab {
-  position: absolute;
-  left: 50%; bottom: calc(var(--tabbar-h) + 16px + env(safe-area-inset-bottom));
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--tabbar-h) + 16px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   width: 72px; height: 72px;
   border-radius: 50%;
@@ -235,9 +235,12 @@ body {
 .fab svg { fill: currentColor; }
 
 /* ===== Плаваюча кнопка «додати трек» ===== */
+/* fixed → завжди над таббаром. ліва позиція = права межа колонки (240px від
+   центру) мінус відступ 18px, тож кнопка сидить у правому нижньому куті
+   колонки застосунку на будь-якій ширині екрана (десктоп/планшет). */
 .add-fab {
-  position: absolute;
-  right: 18px;
+  position: fixed;
+  left: calc(50% + 240px - 54px - 18px);
   bottom: calc(var(--tabbar-h) + 18px + env(safe-area-inset-bottom));
   width: 54px; height: 54px;
   border-radius: 50%;
@@ -424,29 +427,73 @@ body {
 .track-art.playing.paused .ico-play { opacity: 1; }
 .track-art.playing.paused .ico-pause { opacity: 0; }
 
-/* ===== Тайм-пікер ===== */
-.time-picker {
-  display: flex; justify-content: center; gap: 24px;
-  margin: 16px 0;
+/* ===== Тайм-пікер — iOS wheel (барабан) ===== */
+.wheel-picker {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  height: 220px;
+  margin: 12px 0 8px;
+  /* mask: плавне затухання зверху/знизу, як у iOS */
+  -webkit-mask: linear-gradient(to bottom, transparent 0%, #000 30%, #000 70%, transparent 100%);
+          mask: linear-gradient(to bottom, transparent 0%, #000 30%, #000 70%, transparent 100%);
 }
-.time-col {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
+.wheel-col {
+  position: relative;
+  width: 78px;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
-.time-col input {
-  width: 64px; text-align: center;
-  font-size: 32px; font-weight: 700;
-  background: var(--surface-2); border: none; border-radius: 10px;
-  color: var(--label); padding: 8px 4px;
+.wheel-scroll {
+  width: 100%;
+  /* 5 видимих слотів по 44px = 220px; обраний — центральний */
+  padding: 88px 0; /* 2 слоти зверху/знизу → центральний сліт */
+  will-change: transform;
+  transition: transform 0.32s cubic-bezier(0.23, 1, 0.32, 1);
+  touch-action: pan-y;
+  cursor: grab;
+}
+.wheel-scroll.dragging { transition: none; cursor: grabbing; }
+.wheel-item {
+  height: 44px;
+  line-height: 44px;
+  text-align: center;
+  font-size: 26px;
+  font-weight: 500;
+  color: var(--label);
   font-variant-numeric: tabular-nums;
+  user-select: none;
+  opacity: 0.35;
+  transition: opacity 0.2s;
 }
-.time-col input:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
-.picker-btn {
-  width: 40px; height: 32px;
-  background: var(--surface-2); border: none; border-radius: 8px;
-  color: var(--accent); font-size: 14px; cursor: pointer;
+.wheel-item.center { opacity: 1; }
+.wheel-item.empty { opacity: 0; }
+.wheel-label {
+  position: absolute;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--label-3);
+  font-weight: 600;
+  text-transform: lowercase;
+  pointer-events: none;
 }
-.picker-btn:active { background: var(--surface-3); }
-.picker-label { font-size: 12px; color: var(--label-3); }
+/* центральна смуга виділення */
+.wheel-highlight {
+  position: absolute;
+  left: 8px; right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 44px;
+  background: var(--surface-2);
+  border-radius: 12px;
+  pointer-events: none;
+  z-index: 0;
+}
+.wheel-col, .wheel-scroll { z-index: 1; }
 .presets { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
 .preset-btn {
   background: var(--surface-2); border: 1px solid transparent; border-radius: 14px;

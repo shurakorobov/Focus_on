@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f5f0fa" media="(prefers-color-scheme: light)" />
   <title>Focus ON</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260711c" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260711d" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -241,7 +241,7 @@
   <!-- ===== Тост-сповіщення ===== -->
   <div class="toast hidden" id="toast"></div>
 
-  <!-- ===== Модал: ручне виставлення часу ===== -->
+  <!-- ===== Модал: ручне виставлення часу (iOS-стиль wheel picker) ===== -->
   <div class="modal hidden" id="time-modal">
     <div class="sheet">
       <div class="sheet-handle"></div>
@@ -250,25 +250,20 @@
         <h3>Час фокусу</h3>
         <button class="sheet-btn accent" id="btn-time-save">Готово</button>
       </div>
-      <div class="time-picker">
-        <div class="time-col">
-          <button class="picker-btn" data-dir="h" data-delta="1">▲</button>
-          <input type="text" id="pick-h" value="0" inputmode="numeric" maxlength="2" />
-          <button class="picker-btn" data-dir="h" data-delta="-1">▼</button>
-          <span class="picker-label">год</span>
+      <div class="wheel-picker" id="wheel-picker">
+        <div class="wheel-col" data-unit="h" data-max="23">
+          <div class="wheel-scroll"></div>
+          <span class="wheel-label">год</span>
         </div>
-        <div class="time-col">
-          <button class="picker-btn" data-dir="m" data-delta="1">▲</button>
-          <input type="text" id="pick-m" value="25" inputmode="numeric" maxlength="2" />
-          <button class="picker-btn" data-dir="m" data-delta="-1">▼</button>
-          <span class="picker-label">хв</span>
+        <div class="wheel-col" data-unit="m" data-max="59">
+          <div class="wheel-scroll"></div>
+          <span class="wheel-label">хв</span>
         </div>
-        <div class="time-col">
-          <button class="picker-btn" data-dir="s" data-delta="1">▲</button>
-          <input type="text" id="pick-s" value="0" inputmode="numeric" maxlength="2" />
-          <button class="picker-btn" data-dir="s" data-delta="-1">▼</button>
-          <span class="picker-label">сек</span>
+        <div class="wheel-col" data-unit="s" data-max="59">
+          <div class="wheel-scroll"></div>
+          <span class="wheel-label">сек</span>
         </div>
+        <div class="wheel-highlight"></div>
       </div>
       <div class="presets">
         <button class="preset-btn" data-sec="300">5 хв</button>
@@ -296,8 +291,8 @@
   <audio id="audio-el" preload="auto" playsinline webkit-playsinline></audio>
   <div id="yt-container" class="hidden"></div>
 
-  <script src="/static/api.js?v=20260711c"></script>
-  <script src="/static/cache.js?v=20260711c"></script>
-  <script src="/static/app.js?v=20260711c"></script>
+  <script src="/static/api.js?v=20260711d"></script>
+  <script src="/static/cache.js?v=20260711d"></script>
+  <script src="/static/app.js?v=20260711d"></script>
 </body>
 </html>
