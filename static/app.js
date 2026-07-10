@@ -2034,16 +2034,17 @@
   }
 
   // ---------- Heartbeat: позначає користувача онлайн ----------
+  // частий heartbeat (8с) + миттєвий SSE-пуш адміну (2с) → real-time відчуття.
   let _hbTimer = null;
   function setupHeartbeat() {
-    // перший пуш одразу після ініціалізації
-    setTimeout(() => { API.heartbeat().catch(() => {}); }, 2000);
-    // далі кожні 30с — поки вікно видиме
+    // перший пуш — якнайшвидше після ініціалізації
+    setTimeout(() => { API.heartbeat().catch(() => {}); }, 800);
+    // далі кожні 8с — поки вікно видиме
     _hbTimer = setInterval(() => {
       if (document.visibilityState === "visible") {
         API.heartbeat().catch(() => {});
       }
-    }, 30000);
+    }, 8000);
     // при поверненні у вікно — одразу
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {

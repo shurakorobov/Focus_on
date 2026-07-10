@@ -97,7 +97,9 @@ _admin_subscribers: set = set()
 
 # In-memory трекер онлайн-користувачів: {tg_id: last_seen_monotonic}
 # Не ліземо в БД на кожен heartbeat (Neon scale-to-zero засинає).
-_ONLINE_TTL = 120  # секунд: користувач вважається онлайн якщо heartbeat < 2 хв тому
+# TTL має бути > кількох інтервалів heartbeat (8с), щоб випадковий джиттер
+# не «дропав» активного юзера. 25с ≈ 3× heartbeat — надійно ловить вихід.
+_ONLINE_TTL = 25  # секунд: користувач вважається онлайн якщо heartbeat < 25с тому
 _online_users: dict = {}  # tg_id (int) -> time.time() (float)
 
 
@@ -123,6 +125,11 @@ def _prune_online() -> None:
         _online_users.pop(uid, None)
 
 
+# Кеш імен/планів онлайн-користувачів. Імена змінюються рідко, тож запит до БД
+# робимо лише коли з'являється новий tg_id, якого ще немає в кеші.
+_online_name_cache: dict = {}  # tg_id -> {name, username, plan}
+
+
 def online_count() -> int:
     """Кількість користувачів онлайн прямо зараз."""
     _prune_online()
@@ -130,26 +137,32 @@ def online_count() -> int:
 
 
 def online_users() -> list[dict]:
-    """Список онлайн-користувачів з іменами (для дашборду)."""
+    """Список онлайн-користувачів з іменами (для дашборду).
+    Імена кешуються — БД-запит лише для нових tg_id."""
     _prune_online()
     ids = list(_online_users.keys())
     if not ids:
         return []
-    placeholders = ",".join(["?"] * len(ids))  # _translate_sql → %s під PG
-    with db.get_conn() as conn:
-        rows = conn.execute(
-            f"SELECT tg_id, first_name, username, plan FROM users WHERE tg_id IN ({placeholders})",
-            tuple(ids),
-        ).fetchall()
-    return [
-        {
-            "tg_id": r["tg_id"],
-            "name": r["first_name"] or r["username"] or ("ID:" + str(r["tg_id"])),
-            "username": r["username"],
-            "plan": r["plan"],
-        }
-        for r in rows
-    ]
+    # яких tg_id ще немає в кеші — тягнемо з БД
+    missing = [uid for uid in ids if uid not in _online_name_cache]
+    if missing:
+        placeholders = ",".join(["?"] * len(missing))  # _translate_sql → %s під PG
+        try:
+            with db.get_conn() as conn:
+                rows = conn.execute(
+                    f"SELECT tg_id, first_name, username, plan FROM users WHERE tg_id IN ({placeholders})",
+                    tuple(missing),
+                ).fetchall()
+            for r in rows:
+                _online_name_cache[int(r["tg_id"])] = {
+                    "tg_id": int(r["tg_id"]),
+                    "name": r["first_name"] or r["username"] or ("ID:" + str(r["tg_id"])),
+                    "username": r["username"],
+                    "plan": r["plan"],
+                }
+        except Exception:
+            pass
+    return [_online_name_cache[uid] for uid in ids if uid in _online_name_cache]
 
 
 # ---------------------- Глобальний обробник помилок -------------------------
@@ -920,14 +933,15 @@ async def api_admin_stats_stream(request: Request):
             while True:
                 if await request.is_disconnected():
                     break
-                # чекаємо або подію зміни даних, або таймаут для онлайн-пушу (5с)
+                # чекаємо або подію зміни даних, або таймаут для онлайн-пушу (2с)
                 triggered = False
                 try:
-                    await asyncio.wait_for(queue.get(), timeout=5)
+                    await asyncio.wait_for(queue.get(), timeout=2)
                     triggered = True
                 except asyncio.TimeoutError:
                     pass
-                # онлайн-статистику шлемо кожні 5с (дешево — in-memory, без БД)
+                # онлайн-статистику шлемо кожні 2с (дешево — in-memory, без БД)
+                # це ж і keep-alive для SSE-з'єднання
                 yield f"event: online\ndata: {json.dumps({'count': online_count(), 'users': online_users()})}\n\n"
                 # якщо були реальні зміни даних — повний пуш статистики
                 if triggered:
