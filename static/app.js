@@ -1680,10 +1680,15 @@
     });
 
     // закриття модалів по тапу на фон + swipe-down по .sheet
+    // time-modal ВИКЛЮЧЕНО зі swipe-down: колесо використовує вертикальні жести,
+    // тож свайп вниз має прокручувати пікер, а не закривати модал
     $$(".modal").forEach((m) => {
       m.addEventListener("click", (e) => {
-        if (e.target === m) m.classList.add("hidden");
+        if (e.target !== m) return;
+        if (m.id === "time-modal") { closeTimePicker(); return; }
+        m.classList.add("hidden");
       });
+      if (m.id === "time-modal") return; // без swipe-down для пікера
       const sheet = m.querySelector(".sheet");
       if (sheet) setupSheetSwipeDown(m, sheet);
     });
@@ -1836,7 +1841,7 @@
 
   // ---------- Тайм-пікер (iOS wheel) ----------
   const WHEEL_ITEM_H = 44; // має збігатись з CSS .wheel-item height
-  let _wheelState = { h: 0, m: 25, s: 0 };
+  let _wheelState = { h: 0, m: 25 };
 
   // Створює одне «колесо» з інерційним перетягуванням, wheel-скролом,
   // тапом по елементу та клавіатурою. Повертає геттер/сеттер значення.
@@ -1854,8 +1859,19 @@
     const items = scroll.querySelectorAll(".wheel-item");
 
     let current = 0;
+    let lastHapticSlot = 0; // останній слот, на якому лунала вібрація
+
+    function hapticTick() {
+      // selectionChanged — нативний «клік» iOS-пікера; працює на Android теж
+      if (tg && tg.HapticFeedback) {
+        try { tg.HapticFeedback.selectionChanged(); } catch (e) {}
+      } else {
+        haptic("light"); // fallback
+      }
+    }
 
     function snapTo(val, animate = true) {
+      const prev = current;
       current = ((val % (max + 1)) + (max + 1)) % (max + 1);
       if (!animate) scroll.classList.add("dragging");
       scroll.style.transform = "translateY(" + (-current * WHEEL_ITEM_H) + "px)";
@@ -1863,6 +1879,8 @@
       if (items[current]) items[current].classList.add("center");
       if (!animate) requestAnimationFrame(() => scroll.classList.remove("dragging"));
       _wheelState[unit] = current;
+      // вібрація при зміні слоту (окрім першого встановлення)
+      if (prev !== current) { hapticTick(); lastHapticSlot = current; }
     }
 
     // --- перетягування (touch + mouse) ---
@@ -1888,6 +1906,8 @@
       const near = ((Math.round(offset) % (max + 1)) + (max + 1)) % (max + 1);
       items.forEach((it) => it.classList.remove("center"));
       if (items[near]) items[near].classList.add("center");
+      // вібрація при переході через кожен слот (як нативний picker)
+      if (near !== lastHapticSlot) { hapticTick(); lastHapticSlot = near; }
     }
     function onUp() {
       if (!dragging) return;
@@ -1941,7 +1961,6 @@
   function openTimePicker() {
     const h = Math.floor(state.totalSeconds / 3600);
     const m = Math.floor((state.totalSeconds % 3600) / 60);
-    const s = state.totalSeconds % 60;
     if (!_wheels) {
       _wheels = {};
       $$(".wheel-col").forEach((col) => {
@@ -1950,19 +1969,20 @@
     }
     _wheels.h.set(h);
     _wheels.m.set(m);
-    _wheels.s.set(s);
     $("#time-modal").classList.remove("hidden");
+    // блокуємо нативний pull-down Telegram (щоб свайп по колесу не згортав вікно)
+    _setVerticalSwipes(false);
   }
 
   function setupTimePicker() {
-    $("#btn-time-cancel").addEventListener("click", () => $("#time-modal").classList.add("hidden"));
+    $("#btn-time-cancel").addEventListener("click", () => closeTimePicker());
     $("#btn-time-save").addEventListener("click", () => {
-      const total = _wheels.h.get() * 3600 + _wheels.m.get() * 60 + _wheels.s.get();
-      if (total >= 5) {
+      const total = _wheels.h.get() * 3600 + _wheels.m.get() * 60;
+      if (total >= 60) {
         setCustomTime(total);
-        $("#time-modal").classList.add("hidden");
+        closeTimePicker();
       } else {
-        toast("Мінімум 5 секунд");
+        toast("Мінімум 1 хвилина");
       }
     });
 
@@ -1971,9 +1991,27 @@
       btn.addEventListener("click", () => {
         const sec = parseInt(btn.dataset.sec);
         setCustomTime(sec);
-        $("#time-modal").classList.add("hidden");
+        closeTimePicker();
       });
     });
+  }
+
+  function closeTimePicker() {
+    $("#time-modal").classList.add("hidden");
+    _setVerticalSwipes(true); // повертаємо нативні свайпи
+  }
+
+  // Вмикає/вимикає вертикальні свайпи Telegram WebApp.
+  // Коли wheel-пікер відкритий — вимикаємо, щоб свайп по колесу не згортав вікно.
+  function _setVerticalSwipes(enable) {
+    if (!tg) return;
+    try {
+      if (enable) {
+        if (tg.enableVerticalSwipes) tg.enableVerticalSwipes();
+      } else {
+        if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+      }
+    } catch (e) {}
   }
 
   // ---------- Взаємодія з таймером: тап = play/pause, утримання = STOP ----------
