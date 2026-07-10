@@ -51,19 +51,18 @@ _IS_PG = settings.use_postgres
 def _translate_sql(sql: str) -> str:
     """Перекладає SQL з SQLite-діалекту під поточний backend.
     Для PostgreSQL: ? → %s, INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING,
-    date(x) → (x)::date, AUTOINCREMENT прибираємо (SERIAL зробить це)."""
+    date(x) → (x)::date, AUTOINCREMENT→SERIAL, tg_id INTEGER→tg_id BIGINT."""
     if not _IS_PG:
         return sql  # SQLite — як є
     out = sql.replace("?", "%s")
-    # INSERT OR IGNORE INTO → INSERT INTO ... ON CONFLICT DO NOTHING
+    # INSERT OR IGNORE INTO → INSERT INTO
     out = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", out, flags=re.IGNORECASE)
-    #SQLite INSERT OR IGNORE потребує ON CONFLICT DO NOTHING на кінці для PG.
-    # Вставляємо після першої закриваючої дужки VALUES-блоку — складно загально,
-    # тому обробляємо точково у seed функції. Тут лише базові заміни:
-    # date(col) → (col)::date  (але не в CTE/псевдонімах)
+    # date(col) → (col)::date
     out = re.sub(r"\bdate\((\w+)\)", r"(\1)::date", out)
-    # AUTOINCREMENT не підтримується PG — SERIAL зробить автоінкремент; прибираємо
+    # AUTOINCREMENT не підтримується PG — SERIAL зробить автоінкремент
     out = re.sub(r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "SERIAL PRIMARY KEY", out, flags=re.IGNORECASE)
+    # tg_id INTEGER → tg_id BIGINT (Telegram ID > 2.1 млрд, не вміщується в INTEGER)
+    out = re.sub(r"\btg_id\s+INTEGER\b", "tg_id BIGINT", out, flags=re.IGNORECASE)
     return out
 
 
@@ -188,6 +187,24 @@ def _add_column(conn, table: str, column: str, decl: str) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def _pg_alter_to_bigint(conn) -> None:
+    """PostgreSQL: конвертує tg_id з INTEGER у BIGINT у всіх таблицях.
+    Telegram user IDs > 2.1 млрд не вміщаються в INTEGER."""
+    # знаходимо всі таблиці з колонкою tg_id типу integer
+    cur = conn.execute(
+        """
+        SELECT table_name FROM information_schema.columns
+        WHERE column_name = 'tg_id' AND data_type = 'integer'
+        """
+    )
+    tables = [row["table_name"] for row in cur.fetchall()]
+    for table in tables:
+        try:
+            conn.execute(f"ALTER TABLE {table} ALTER COLUMN tg_id TYPE BIGINT")
+        except Exception:
+            pass  # вже BIGINT або інша помилка — ідемпотентно
+
+
 def migrate() -> None:
     """Безпечна міграція схеми під існуючу базу."""
     with get_conn() as conn:
@@ -196,6 +213,9 @@ def migrate() -> None:
         _add_column(conn, "users", "plan", "TEXT NOT NULL DEFAULT 'free'")
         _add_column(conn, "users", "plan_expires_at", "TEXT NOT NULL DEFAULT ''")
         _add_column(conn, "users", "upload_count", "INTEGER NOT NULL DEFAULT 0")
+        # PostgreSQL: tg_id INTEGER → BIGINT (Telegram ID > 2.1 млрд)
+        if _IS_PG:
+            _pg_alter_to_bigint(conn)
 
         conn.executescript(
             """
