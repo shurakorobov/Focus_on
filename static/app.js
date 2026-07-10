@@ -107,9 +107,50 @@
     try {
       if (type === "light") tg.HapticFeedback.impactOccurred("light");
       else if (type === "med") tg.HapticFeedback.impactOccurred("medium");
+      else if (type === "rigid") tg.HapticFeedback.impactOccurred("rigid");
+      else if (type === "heavy") tg.HapticFeedback.impactOccurred("heavy");
+      else if (type === "soft") tg.HapticFeedback.impactOccurred("soft");
       else if (type === "success") tg.HapticFeedback.notificationOccurred("success");
       else if (type === "error") tg.HapticFeedback.notificationOccurred("error");
     } catch (e) {}
+  }
+
+  // ---------- Звуко-тактильний фідбек (як нативний iOS picker) ----------
+  // Web Audio синтезує короткий «тік» на кожній цифрі (без зовнішніх файлів).
+  // AudioContext створюється ліниво і вимагає user-gesture (WebApp це має).
+  let _audioCtx = null;
+  function audioCtx() {
+    if (_audioCtx) return _audioCtx;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) _audioCtx = new AC();
+    } catch (e) {}
+    return _audioCtx;
+  }
+  // короткий «клік»: вузький імпульс ~8мс — звук прокрутки нативного пікера
+  function playTick() {
+    const ctx = audioCtx();
+    if (!ctx) return;
+    try {
+      if (ctx.state === "suspended") ctx.resume();
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(1800, t);     // високий, різкий тон
+      osc.frequency.exponentialRampToValueAtTime(600, t + 0.008);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.18, t + 0.001); // різка атака
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.03); // швидке затухання
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.04);
+    } catch (e) {}
+  }
+  // комбінований фідбек: різкий haptic (rigid) + «тік» — як на iOS picker
+  function tickFeedback() {
+    haptic("rigid");
+    playTick();
   }
   function platformInfo() {
     const ua = navigator.userAgent || "";
@@ -1859,15 +1900,15 @@
     const items = scroll.querySelectorAll(".wheel-item");
 
     let current = 0;
-    let lastHapticSlot = 0; // останній слот, на якому лунала вібрація
+    let lastHapticSlot = 0; // останній слот, на якому лунав фідбек
 
     function hapticTick() {
-      // selectionChanged — нативний «клік» iOS-пікера; працює на Android теж
-      if (tg && tg.HapticFeedback) {
-        try { tg.HapticFeedback.selectionChanged(); } catch (e) {}
-      } else {
-        haptic("light"); // fallback
-      }
+      // різкий rigid-impact + синтетичний «тік» — як нативний iOS picker.
+      // throttle: не частіше ніж кожні 45мс, щоб не «залипало» при швидкій прокрутці
+      const now = performance.now();
+      if (now - (hapticTick._last || 0) < 45) return;
+      hapticTick._last = now;
+      tickFeedback();
     }
 
     function snapTo(val, animate = true) {
@@ -1961,6 +2002,10 @@
   function openTimePicker() {
     const h = Math.floor(state.totalSeconds / 3600);
     const m = Math.floor((state.totalSeconds % 3600) / 60);
+    // «розблоковуємо» AudioContext у рамках user-gesture (тап по «Свій час»),
+    // щоб звуки тікання працювали під час прокрутки колеса
+    const ctx = audioCtx();
+    if (ctx && ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
     if (!_wheels) {
       _wheels = {};
       $$(".wheel-col").forEach((col) => {
