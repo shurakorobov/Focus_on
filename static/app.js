@@ -383,6 +383,7 @@
   // ---------- Адмін-статистика ----------
   // ---------- SSE real-time admin stream ----------
   let _adminSSE = null;
+  let onlineNow = 0;  // кеш останнього онлайн-каунту з SSE-події
 
   function startAdminSSE() {
     stopAdminSSE();
@@ -392,12 +393,20 @@
     const url = "/api/admin/stats/stream?init_data=" + encodeURIComponent(initData);
     try {
       _adminSSE = new EventSource(url);
+      // безіменні події (data:) = повна статистика
       _adminSSE.onmessage = (event) => {
         try {
           const d = JSON.parse(event.data);
           if (d && d.users) renderAdminStatsData(d);
         } catch (e) {}
       };
+      // іменована подія "online" = легкий realtime-пуш кожні 5с
+      _adminSSE.addEventListener("online", (event) => {
+        try {
+          const d = JSON.parse(event.data);
+          renderOnlineUsers(d);
+        } catch (e) {}
+      });
       _adminSSE.onerror = () => {
         // SSE може падати при засинанні — перепідключення через 5с
         if (_adminSSE) { _adminSSE.close(); _adminSSE = null; }
@@ -406,6 +415,37 @@
     } catch (e) {
       console.warn("SSE не підтримується:", e.message);
     }
+  }
+
+  // ---------- Онлайн-користувачі (realtime) ----------
+  function renderOnlineUsers(data) {
+    const el = $("#admin-online");
+    onlineNow = data.count || 0;
+    if (!el) return;
+    const count = onlineNow;
+    const users = data.users || [];
+    const pulse = count > 0 ? '<span class="online-dot"></span>' : '<span class="online-dot idle"></span>';
+    let html = '<div class="online-head">' + pulse +
+      '<span class="online-count">' + count + '</span> онлайн' +
+      '<span class="online-sub">зараз у застосунку</span></div>';
+    if (users.length) {
+      html += '<div class="online-list">';
+      users.slice(0, 12).forEach((u) => {
+        const name = u.name || ("ID:" + u.tg_id);
+        const star = u.plan === "premium" ? " ⭐" : "";
+        let link;
+        if (u.username) {
+          link = '<a href="https://t.me/' + escapeHtml(u.username) + '" class="user-link">' + escapeHtml(name) + '</a>';
+        } else {
+          link = '<a href="tg://user?id=' + u.tg_id + '" class="user-link">' + escapeHtml(name) + '</a>';
+        }
+        html += '<div class="online-user">' +
+          '<span class="online-dot mini"></span>' + link + star + '</div>';
+      });
+      if (users.length > 12) html += '<div class="online-more">ще ' + (users.length - 12) + '</div>';
+      html += '</div>';
+    }
+    el.innerHTML = html;
   }
 
   function stopAdminSSE() {
@@ -434,12 +474,13 @@
     const modesMeta = d.modes || {};
 
       let html = '<div class="admin-cards">';
+      const online = (d.online && d.online.count != null) ? d.online.count : onlineNow;
+      html += adminCard("🟢", online, "онлайн");
       html += adminCard("👥", u.total, "користувачів");
       html += adminCard("⭐", u.premium, "преміум");
       html += adminCard("📊", s.total, "сесій");
       html += adminCard("🔥", u.dau || 0, "DAU");
       html += adminCard("📅", u.wau || 0, "WAU");
-      html += adminCard("🎵", t.total, "треків");
       html += '</div>';
 
       html += '<div class="net-row"><span class="net-k">Активних за місяць (MAU)</span><span class="net-v">' + (u.mau || 0) + '</span></div>';
@@ -1983,12 +2024,32 @@
     setupAudioEvents();
     setupVisibilityHandler();
     setupCrashReporting();
+    setupHeartbeat();
     selectMode("focus");
     setFabIcon(false);
     renderTimer();
     await loadProfile();
     // передзавантажуємо список треків, щоб pickDefaultTrack мав дані
     Music.load().catch(() => {});
+  }
+
+  // ---------- Heartbeat: позначає користувача онлайн ----------
+  let _hbTimer = null;
+  function setupHeartbeat() {
+    // перший пуш одразу після ініціалізації
+    setTimeout(() => { API.heartbeat().catch(() => {}); }, 2000);
+    // далі кожні 30с — поки вікно видиме
+    _hbTimer = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        API.heartbeat().catch(() => {});
+      }
+    }, 30000);
+    // при поверненні у вікно — одразу
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        API.heartbeat().catch(() => {});
+      }
+    });
   }
 
   // ---------- Автолог крашів та аномалій ----------

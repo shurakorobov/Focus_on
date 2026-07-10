@@ -88,6 +88,8 @@ const API = (() => {
     grantPremium: (tg_id, days) =>
       request("POST", "/api/admin/grant-premium", { json: { tg_id, days } }),
     adminStats: () => request("GET", "/api/admin/stats"),
+    // heartbeat: позначити себе онлайн (fire-and-forget)
+    heartbeat: () => request("POST", "/api/heartbeat"),
 
     // вимірювання швидкості мережі (завантаження ~256КБ з сервера)
     measureSpeed: async () => {

@@ -95,6 +95,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # ---------------------- SSE pub/sub для real-time адмінки ----------------------
 _admin_subscribers: set = set()
 
+# In-memory трекер онлайн-користувачів: {tg_id: last_seen_monotonic}
+# Не ліземо в БД на кожен heartbeat (Neon scale-to-zero засинає).
+_ONLINE_TTL = 120  # секунд: користувач вважається онлайн якщо heartbeat < 2 хв тому
+_online_users: dict = {}  # tg_id (int) -> time.time() (float)
+
 
 def _notify_admin_subscribers():
     """Сповіщає всіх SSE-підписаних адмінів про зміну даних."""
@@ -103,6 +108,48 @@ def _notify_admin_subscribers():
             queue.put_nowait(True)
         except asyncio.QueueFull:
             pass
+
+
+def _touch_online(tg_id: int) -> None:
+    """Оновлює timestamp онлайн-користувача (in-memory)."""
+    _online_users[int(tg_id)] = time.time()
+
+
+def _prune_online() -> None:
+    """Видаляє «застарілі» записи (користувачі, що не давали про себе знати > TTL)."""
+    cutoff = time.time() - _ONLINE_TTL
+    stale = [uid for uid, ts in _online_users.items() if ts < cutoff]
+    for uid in stale:
+        _online_users.pop(uid, None)
+
+
+def online_count() -> int:
+    """Кількість користувачів онлайн прямо зараз."""
+    _prune_online()
+    return len(_online_users)
+
+
+def online_users() -> list[dict]:
+    """Список онлайн-користувачів з іменами (для дашборду)."""
+    _prune_online()
+    ids = list(_online_users.keys())
+    if not ids:
+        return []
+    placeholders = ",".join(["?"] * len(ids))  # _translate_sql → %s під PG
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT tg_id, first_name, username, plan FROM users WHERE tg_id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+    return [
+        {
+            "tg_id": r["tg_id"],
+            "name": r["first_name"] or r["username"] or ("ID:" + str(r["tg_id"])),
+            "username": r["username"],
+            "plan": r["plan"],
+        }
+        for r in rows
+    ]
 
 
 # ---------------------- Глобальний обробник помилок -------------------------
@@ -270,6 +317,7 @@ async def api_categories():
 async def api_me(request: Request, user: dict = Depends(current_user)):
     """Повертає профіль користувача + тариф + мережева інформація."""
     _ensure_user_exists(user)
+    _touch_online(user["id"])  # користувач відкрив застосунок — він онлайн
     profile = db.get_user(user["id"]) or {}
     plan = db.get_user_plan(user["id"])
     recommendations = _recommendations(profile, plan, user)
@@ -844,7 +892,9 @@ async def api_admin_stats(user: dict = Depends(current_user)):
     """Повна статистика використання застосунку (тільки адмін)."""
     if not settings.is_admin(user["id"]):
         raise HTTPException(status_code=403, detail="admin only")
-    return db.get_admin_stats()
+    stats = db.get_admin_stats()
+    stats["online"] = {"count": online_count(), "users": online_users()}
+    return stats
 
 
 @app.get("/api/admin/stats/stream")
@@ -863,24 +913,41 @@ async def api_admin_stats_stream(request: Request):
         queue = asyncio.Queue(maxsize=1)
         _admin_subscribers.add(queue)
         try:
-            # перший пуш — одразу
+            # перший пуш — одразу повна статистика
             yield f"data: {json.dumps(jsonable_encoder(db.get_admin_stats()))}\n\n"
+            # ...і одразу поточний онлайн
+            yield f"event: online\ndata: {json.dumps({'count': online_count(), 'users': online_users()})}\n\n"
             while True:
                 if await request.is_disconnected():
                     break
+                # чекаємо або подію зміни даних, або таймаут для онлайн-пушу (5с)
+                triggered = False
                 try:
-                    await asyncio.wait_for(queue.get(), timeout=25)
+                    await asyncio.wait_for(queue.get(), timeout=5)
+                    triggered = True
                 except asyncio.TimeoutError:
-                    # keep-alive ping кожні 25с
-                    yield ": ping\n\n"
-                    continue
-                # нові дані
-                yield f"data: {json.dumps(jsonable_encoder(db.get_admin_stats()))}\n\n"
+                    pass
+                # онлайн-статистику шлемо кожні 5с (дешево — in-memory, без БД)
+                yield f"event: online\ndata: {json.dumps({'count': online_count(), 'users': online_users()})}\n\n"
+                # якщо були реальні зміни даних — повний пуш статистики
+                if triggered:
+                    yield f"data: {json.dumps(jsonable_encoder(db.get_admin_stats()))}\n\n"
         finally:
             _admin_subscribers.discard(queue)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ------------------------------ онлайн-трекер (heartbeat) -------------------
+
+
+@app.post("/api/heartbeat")
+async def api_heartbeat(user: dict = Depends(current_user)):
+    """Heartbeat від клієнта: позначає користувача онлайн (in-memory).
+    Клієнт шле кожні ~30с + при відновленні видимості вікна."""
+    _touch_online(user["id"])
+    return {"ok": True, "online": online_count()}
 
 
 # ------------------------------ музика у фоні + статистика ------------------

@@ -84,6 +84,9 @@ body {
   max-width: 480px;
   margin: 0 auto;
   width: 100%;
+  /* body — контекст позиціонування для .fab/.add-fab, щоб вони
+     «прилипали» до колонки застосунку, а не до краю viewport на десктопі */
+  position: relative;
 }
 
 .hidden { display: none !important; }
@@ -558,7 +561,7 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   font-size: 14px; font-weight: 500;
   z-index: 200;
   animation: toastIn 0.25s ease;
-  max-width: 88vw; text-align: center;
+  max-width: min(88vw, 440px); text-align: center;
 }
 @keyframes toastIn { from { opacity: 0; transform: translate(-50%, -12px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
@@ -957,4 +960,63 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 
 /* ===== Адаптив таббару під 4 таби ===== */
 .tabbar .tab { flex: 1; }
+
+/* ===== Десктоп: візуальне обрамлення вузької колонки ===== */
+@media (min-width: 600px) {
+  html, body {
+    /* фон трохи темніший по краях, щоб колонка читалась як окрема картка */
+    background:
+      radial-gradient(ellipse 100% 70% at 50% 0%, var(--bg-grad-1) 0%, var(--bg-grad-2) 60%, var(--bg) 100%),
+      var(--bg);
+  }
+  body {
+    /* легка тінь + бічні межі колонки застосунку */
+    box-shadow: 0 0 0 1px var(--separator), 0 24px 80px rgba(0, 0, 0, 0.45);
+    min-height: 100vh;
+  }
+}
+
+/* ===== Онлайн-користувачі (realtime) ===== */
+.online-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 17px; font-weight: 700;
+}
+.online-count { color: var(--green); font-variant-numeric: tabular-nums; }
+.online-sub {
+  font-size: 12px; color: var(--label-3); font-weight: 500;
+  margin-left: auto;
+}
+.online-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 60%, transparent);
+  animation: onlinePulse 1.8s infinite;
+  flex-shrink: 0;
+}
+.online-dot.idle { background: var(--label-3); animation: none; }
+.online-dot.mini {
+  width: 7px; height: 7px;
+  box-shadow: none; animation: none;
+  background: var(--green);
+}
+@keyframes onlinePulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 50%, transparent); }
+  70%  { box-shadow: 0 0 0 7px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.online-list {
+  margin-top: 12px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.online-user {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0;
+  border-bottom: 0.5px solid var(--separator);
+  font-size: 15px;
+}
+.online-user:last-child { border-bottom: none; }
+.online-more {
+  font-size: 13px; color: var(--label-3);
+  padding: 8px 0 0; text-align: center;
+}
 
