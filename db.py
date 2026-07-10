@@ -21,6 +21,23 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
+# Callback-хук для real-time сповіщень (SSE). app.py реєструє його при старті.
+_on_data_changed = None
+
+
+def set_change_callback(fn):
+    """Реєструє callback який викликається при зміні даних (для SSE pub/sub)."""
+    global _on_data_changed
+    _on_data_changed = fn
+
+
+def _notify_changed():
+    if _on_data_changed:
+        try:
+            _on_data_changed()
+        except Exception:
+            pass
+
 from config import settings
 
 # Режими фокусу та їхні тривалості за замовчуванням (у секундах)
@@ -423,6 +440,7 @@ def upsert_user(
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
+    _notify_changed()
 
 
 def get_user(tg_id: int) -> dict | None:
@@ -518,6 +536,7 @@ def save_session(
                 "UPDATE users SET total_focus_seconds = total_focus_seconds + ? WHERE tg_id = ?",
                 (actual, tg_id),
             )
+    _notify_changed()
 
 
 def get_stats(tg_id: int, limit: int = 50) -> dict:
@@ -928,6 +947,7 @@ def record_payment(
             (tg_id, order_id, amount, status, raw, datetime.now(timezone.utc).isoformat()),
         )
         return _last_id(conn, cur, "payments")
+    # NOTE: _notify_changed() викликається у app.py після обробки платежу
 
 
 # ------------------------------ статистика прослуховувань -------------------
@@ -946,6 +966,7 @@ def record_play(
             (tg_id, track_key, title, source, duration, datetime.now(timezone.utc).isoformat()),
         )
         return _last_id(conn, cur, "plays")
+    # не сповіщаємо — це занадто часто (кожен плей)
 
 
 def get_play_stats(tg_id: int | None = None, limit: int = 20) -> dict:

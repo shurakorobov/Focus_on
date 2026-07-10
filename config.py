@@ -23,6 +23,8 @@ class Settings:
     DB_PATH: str = os.getenv("DB_PATH", "focus.db")
     # Постійна PostgreSQL БД (Neon). Якщо задано — використовуємо замість SQLite.
     DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
+    # Версія застосунку (SemVer). Bump вручну при релізі.
+    APP_VERSION: str = os.getenv("APP_VERSION", "0.1.0-beta")
 
     # Список Telegram ID адміністраторів (через кому): хто може додавати
     # загальну музику та завантажувати файли в хмару.

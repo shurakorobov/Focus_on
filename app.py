@@ -10,9 +10,10 @@ import os
 from pathlib import Path
 import time
 
+import asyncio
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -38,6 +39,8 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(keepalive_loop())
     # Реєструємо webhook для прийому Telegram updates (платежі Stars, /start тощо)
     await _setup_webhook()
+    # Реєструємо callback для SSE real-time сповіщень
+    db.set_change_callback(_notify_admin_subscribers)
     yield
     task.cancel()
 
@@ -87,6 +90,19 @@ async def disable_caching(request: Request, call_next):
 
 # Роздаємо статичні ассети (js/css/img)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# ---------------------- SSE pub/sub для real-time адмінки ----------------------
+_admin_subscribers: set = set()
+
+
+def _notify_admin_subscribers():
+    """Сповіщає всіх SSE-підписаних адмінів про зміну даних."""
+    for queue in list(_admin_subscribers):
+        try:
+            queue.put_nowait(True)
+        except asyncio.QueueFull:
+            pass
 
 
 # ---------------------- Глобальний обробник помилок -------------------------
@@ -271,6 +287,7 @@ async def api_me(request: Request, user: dict = Depends(current_user)):
         "recommendations": recommendations,
         "is_admin": settings.is_admin(user["id"]),
         "premium_price_stars": settings.PREMIUM_PRICE_STARS,
+        "version": settings.APP_VERSION,
         "network": geo,
     }
 
@@ -828,6 +845,41 @@ async def api_admin_stats(user: dict = Depends(current_user)):
     if not settings.is_admin(user["id"]):
         raise HTTPException(status_code=403, detail="admin only")
     return db.get_admin_stats()
+
+
+@app.get("/api/admin/stats/stream")
+async def api_admin_stats_stream(request: Request):
+    """SSE stream — real-time оновлення адмін-статистики.
+    Auth через query param init_data (EventSource не підтримує заголовки)."""
+    init_data = request.query_params.get("init_data", "")
+    user = authenticate(init_data)
+    if not user or not settings.is_admin(user["id"]):
+        raise HTTPException(status_code=403, detail="admin only")
+
+    import json
+
+    async def event_generator():
+        queue = asyncio.Queue(maxsize=1)
+        _admin_subscribers.add(queue)
+        try:
+            # перший пуш — одразу
+            yield f"data: {json.dumps(db.get_admin_stats())}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=25)
+                except asyncio.TimeoutError:
+                    # keep-alive ping кожні 25с
+                    yield ": ping\n\n"
+                    continue
+                # нові дані
+                yield f"data: {json.dumps(db.get_admin_stats())}\n\n"
+        finally:
+            _admin_subscribers.discard(queue)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ------------------------------ музика у фоні + статистика ------------------

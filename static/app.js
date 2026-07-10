@@ -1,16 +1,40 @@
-// ===== Focus OS — головна логіка (Apple-style) =====
+// ===== Focus ON — головна логіка =====
 
 (() => {
   "use strict";
 
   const tg = window.Telegram && window.Telegram.WebApp;
+
+  // ---------- Тема (світла/темна) ----------
+  function getStoredTheme() {
+    try { return localStorage.getItem("focus-theme") || "dark"; } catch (e) { return "dark"; }
+  }
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    const bg = theme === "light" ? "#f5f0fa" : "#07030f";
+    const bottomBar = theme === "light" ? "#f5f0fa" : "#160c2a";
+    if (tg) {
+      if (tg.setHeaderColor) tg.setHeaderColor(bg);
+      if (tg.setBackgroundColor) tg.setBackgroundColor(bg);
+      if (tg.setBottomBarColor) tg.setBottomBarColor(bottomBar);
+    }
+    const ico = document.querySelector("#btn-theme-toggle .action-ico");
+    if (ico) ico.textContent = theme === "light" ? "☀️" : "🌙";
+  }
+  function toggleTheme() {
+    const cur = getStoredTheme();
+    const next = cur === "dark" ? "light" : "dark";
+    try { localStorage.setItem("focus-theme", next); } catch (e) {}
+    applyTheme(next);
+    haptic("light");
+  }
+
   if (tg) {
     tg.ready();
     tg.expand();
-    if (tg.setHeaderColor) tg.setHeaderColor("#050208");
-    if (tg.setBackgroundColor) tg.setBackgroundColor("#050208");
-    if (tg.setBottomBarColor) tg.setBottomBarColor("#120a1f");
   }
+  // тема до ініціалізації решти
+  applyTheme(getStoredTheme());
 
   // ---------- Стан ----------
   const MODES = {
@@ -300,22 +324,21 @@
       state.isAdmin = !!data.is_admin;
       state.planExpiresAt = data.plan_expires_at || "";
       state.premiumPriceStars = data.premium_price_stars || 100;
+      // версія з сервера
+      const ver = data.version || "0.1.0-beta";
+      const footer = document.getElementById("profile-footer");
+      if (footer) footer.textContent = "Focus ON · " + ver;
       renderProfile(data);
       // адмін-дашборд
       if (data.is_admin) {
         $("#admin-dashboard").classList.remove("hidden");
         loadAdminStats();
         loadPromoCodes();
-        // автооновлення статистики кожні 30с (реальний час)
-        if (state._adminStatsInterval) clearInterval(state._adminStatsInterval);
-        state._adminStatsInterval = setInterval(() => {
-          if (state.screen === "profile" && state.isAdmin) {
-            loadAdminStats();
-          }
-        }, 30000);
+        // SSE real-time stream
+        startAdminSSE();
       } else {
         $("#admin-dashboard").classList.add("hidden");
-        if (state._adminStatsInterval) { clearInterval(state._adminStatsInterval); state._adminStatsInterval = null; }
+        stopAdminSSE();
       }
     } catch (e) {
       $("#profile-head").innerHTML = '<div class="hint-inline">Не вдалося завантажити профіль</div>';
@@ -358,17 +381,57 @@
   }
 
   // ---------- Адмін-статистика ----------
+  // ---------- SSE real-time admin stream ----------
+  let _adminSSE = null;
+
+  function startAdminSSE() {
+    stopAdminSSE();
+    const initData = API.getInitData();
+    if (!initData) return;
+    // SSE через EventSource з auth у query (EventSource не підтримує заголовки)
+    const url = "/api/admin/stats/stream?init_data=" + encodeURIComponent(initData);
+    try {
+      _adminSSE = new EventSource(url);
+      _adminSSE.onmessage = (event) => {
+        try {
+          const d = JSON.parse(event.data);
+          if (d && d.users) renderAdminStatsData(d);
+        } catch (e) {}
+      };
+      _adminSSE.onerror = () => {
+        // SSE може падати при засинанні — перепідключення через 5с
+        if (_adminSSE) { _adminSSE.close(); _adminSSE = null; }
+        setTimeout(() => { if (state.isAdmin) startAdminSSE(); }, 5000);
+      };
+    } catch (e) {
+      console.warn("SSE не підтримується:", e.message);
+    }
+  }
+
+  function stopAdminSSE() {
+    if (_adminSSE) { _adminSSE.close(); _adminSSE = null; }
+  }
+
   async function loadAdminStats() {
     const el = $("#admin-stats");
     if (!el) return;
     try {
       const d = await API.adminStats();
-      const u = d.users || {};
-      const s = d.sessions || {};
-      const t = d.tracks || {};
-      const p = d.payments || {};
-      const catsMeta = d.categories || {};
-      const modesMeta = d.modes || {};
+      renderAdminStatsData(d);
+    } catch (e) {
+      el.innerHTML = '<div class="hint-inline">Не вдалося завантажити статистику</div>';
+    }
+  }
+
+  function renderAdminStatsData(d) {
+    const el = $("#admin-stats");
+    if (!el) return;
+    const u = d.users || {};
+    const s = d.sessions || {};
+    const t = d.tracks || {};
+    const p = d.payments || {};
+    const catsMeta = d.categories || {};
+    const modesMeta = d.modes || {};
 
       let html = '<div class="admin-cards">';
       html += adminCard("👥", u.total, "користувачів");
@@ -430,9 +493,6 @@
       }
 
       el.innerHTML = html;
-    } catch (e) {
-      el.innerHTML = '<div class="hint-inline">Не вдалося завантажити статистику</div>';
-    }
   }
 
   function adminCard(emoji, value, label) {
@@ -1398,13 +1458,13 @@
         t.kind === "youtube" ? "YouTube" :
         t.kind === "soundcloud" ? "SoundCloud" :
         t.kind === "spotify" ? "Spotify" :
-        t.kind === "apple_music" ? "Apple Music" : "Focus OS"
+        t.kind === "apple_music" ? "Apple Music" : "Focus ON"
       );
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: title,
           artist: artist,
-          album: "Focus OS",
+          album: "Focus ON",
           artwork: [
             { src: "/static/icon-96.png", sizes: "96x96", type: "image/png" },
             { src: "/static/icon-192.png", sizes: "192x192", type: "image/png" },
@@ -1648,9 +1708,11 @@
       $("#bug-modal").classList.remove("hidden");
       $("#bug-message").focus();
     });
-    // підтримка — посилання на адміна
+    // тема — перемикач світла/темна
+    $("#btn-theme-toggle").addEventListener("click", toggleTheme);
+    // підтримка — з'єднання з адміністратором
     $("#btn-support").addEventListener("click", () => {
-      const url = "https://t.me/focuson_on_bot";
+      const url = "https://t.me/shurakorobov";
       if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
       else window.open(url, "_blank");
     });

@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#050208" />
-  <title>Focus OS</title>
+  <meta name="theme-color" content="#07030f" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f5f0fa" media="(prefers-color-scheme: light)" />
+  <title>Focus ON</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260710i" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260711a" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -114,6 +115,11 @@
       <div class="profile-card" id="profile-cache"></div>
 
       <div class="action-list">
+        <button class="action-row" id="btn-theme-toggle">
+          <span class="action-ico">🌙</span>
+          <span class="action-text">Тема</span>
+          <span class="action-chev">›</span>
+        </button>
         <button class="action-row" id="btn-report-bug">
           <span class="action-ico">🐞</span>
           <span class="action-text">Повідомити про баг</span>
@@ -126,13 +132,13 @@
         </button>
       </div>
 
-      <div class="profile-footer">Focus OS · версія 2.0</div>
+      <div class="profile-footer" id="profile-footer">Focus ON · 0.1.0-beta</div>
 
       <!-- ===== Промокод ===== -->
       <h2 class="group-title">Промокод</h2>
       <div class="profile-card" id="promo-section">
         <input type="text" id="promo-input" placeholder="Введи промокод" autocomplete="off" maxlength="50" />
-        <button class="primary-btn" id="btn-redeem">Активувати</button>
+        <button class="primary-btn" id="btn-redeem">ОК</button>
       </div>
 
       <!-- ===== Адмін-дашборд (видно лише адміну) ===== -->
@@ -289,8 +295,8 @@
   <audio id="audio-el" preload="auto" playsinline webkit-playsinline></audio>
   <div id="yt-container" class="hidden"></div>
 
-  <script src="/static/api.js?v=20260710i"></script>
-  <script src="/static/cache.js?v=20260710i"></script>
-  <script src="/static/app.js?v=20260710i"></script>
+  <script src="/static/api.js?v=20260711a"></script>
+  <script src="/static/cache.js?v=20260711a"></script>
+  <script src="/static/app.js?v=20260711a"></script>
 </body>
 </html>
