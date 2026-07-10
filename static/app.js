@@ -907,6 +907,9 @@
         escapeHtml(t.author || sourceLabel) +
         "</div></div>" +
         '<div class="track-actions">' +
+          '<button class="track-act bg" data-act="bg" aria-label="Грати у фоні" title="Грати у фоні">' +
+            '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3v9.28a4.39 4.39 0 0 0-1.5-.28A3.5 3.5 0 1 0 14 15.5V6h4V3z" fill="currentColor"/></svg>' +
+          '</button>' +
           '<button class="track-act fav' + favCls + '" data-act="fav" aria-label="Бажане">' +
             '<svg class="ico-heart" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>' +
           '</button>' +
@@ -1116,7 +1119,6 @@
           if (btn) btn.classList.toggle("active", res.is_favorite);
           haptic("light");
           toast(res.is_favorite ? "♡ Додано в бажане" : "Прибрано з бажаного");
-          // перегрупувати, щоб трек потрапив у групу «Бажане» / покинув її
           this.load();
         } else if (act === "pin") {
           const res = await API.togglePin(key);
@@ -1125,10 +1127,47 @@
           if (btn) btn.classList.toggle("active", res.is_pinned);
           haptic("light");
           toast(res.is_pinned ? "📌 Закріплено" : "Відкріплено");
-          this.load(); // перегрупувати
+          this.load();
+        } else if (act === "bg") {
+          await this.playInBackground(t);
         }
       } catch (e) {
         toast("Не вдалося: " + e.message);
+      }
+    },
+
+    // Грати у фоні: пряме аудіо → sendAudio в чат; embed → deep link
+    async playInBackground(t) {
+      const key = t.track_key || ("db:" + t.id);
+      const title = t.title || "Без назви";
+      haptic("light");
+      if (t.kind === "audio") {
+        // пряме аудіо → бот відправляє в чат (нативний плеєр з фоном)
+        toast("Відправляю в чат…");
+        try {
+          const res = await API.playInBackground(key, title);
+          if (res.sent) {
+            toast("🎵 Аудіо в чаті — грай у фоні!");
+          } else {
+            toast(res.error || "Не вдалось відправити. Спробуй пряме URL.");
+          }
+        } catch (e) {
+          toast("Не вдалось: " + e.message);
+        }
+      } else if (t.kind === "youtube" || t.kind === "soundcloud" || t.kind === "spotify" || t.kind === "apple_music") {
+        // embed-джерело → відкриваємо нативний застосунок
+        let deepUrl = t.url;
+        if (t.kind === "youtube" && t.embed_url) {
+          // витягти video id і відкрити в нативному YT
+          deepUrl = t.url;
+        }
+        if (tg && tg.openLink) {
+          tg.openLink(deepUrl, { try_instant_view: false });
+        } else {
+          window.open(deepUrl, "_blank");
+        }
+        toast("Відкриваю нативний плеєр для фонового відтворення");
+        try { await API.recordPlay(key, title, "deeplink", 0); } catch (e) {}
       }
     },
 
