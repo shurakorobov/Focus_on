@@ -306,8 +306,16 @@
         $("#admin-dashboard").classList.remove("hidden");
         loadAdminStats();
         loadPromoCodes();
+        // автооновлення статистики кожні 30с (реальний час)
+        if (state._adminStatsInterval) clearInterval(state._adminStatsInterval);
+        state._adminStatsInterval = setInterval(() => {
+          if (state.screen === "profile" && state.isAdmin) {
+            loadAdminStats();
+          }
+        }, 30000);
       } else {
         $("#admin-dashboard").classList.add("hidden");
+        if (state._adminStatsInterval) { clearInterval(state._adminStatsInterval); state._adminStatsInterval = null; }
       }
     } catch (e) {
       $("#profile-head").innerHTML = '<div class="hint-inline">Не вдалося завантажити профіль</div>';
@@ -403,13 +411,20 @@
         html += '</div>';
       }
 
-      // топ користувачі
+      // топ користувачі з лінками на ТГ профіль
       if (d.top_users && d.top_users.length) {
         html += '<h2 class="group-title">Топ користувачів</h2><div class="list-group">';
         d.top_users.forEach((u, i) => {
           const name = u.first_name || u.username || ("ID:" + u.tg_id);
           const star = u.plan === "premium" ? " ⭐" : "";
-          html += '<div class="list-row"><span>' + (i + 1) + ". " + escapeHtml(name) + star + '</span><span class="r-time">' + human(u.total_focus_seconds) + '</span></div>';
+          // лінк на профіль: якщо є @username → t.me/username, інакше tg://user?id=
+          let profileLink;
+          if (u.username) {
+            profileLink = '<a href="https://t.me/' + escapeHtml(u.username) + '" class="user-link">' + escapeHtml(name) + '</a>';
+          } else {
+            profileLink = '<a href="tg://user?id=' + u.tg_id + '" class="user-link">' + escapeHtml(name) + '</a>';
+          }
+          html += '<div class="list-row"><span>' + (i + 1) + ". " + profileLink + star + '</span><span class="r-time">' + human(u.total_focus_seconds) + '</span></div>';
         });
         html += '</div>';
       }

@@ -56,6 +56,10 @@ body {
   min-height: 100vh;
   /* safe area */
   padding-top: env(safe-area-inset-top);
+  /* десктоп: центруємо контент, обмежуємо ширину */
+  max-width: 480px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .hidden { display: none !important; }
@@ -778,6 +782,14 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   font-size: 13px;
   margin-top: 20px;
 }
+
+/* лінки на профіль користувачів в адмін-статистиці */
+.user-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+.user-link:hover { text-decoration: underline; }
 
 /* ===== Промокоди ===== */
 #promo-section { display: flex; gap: 10px; flex-direction: column; }
