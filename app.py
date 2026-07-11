@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import asyncio
 import httpx
@@ -24,6 +25,10 @@ from telegram_auth import authenticate
 
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
+LANDING_FILE = BASE_DIR / "landing.html"
+PRIVACY_FILE = BASE_DIR / "privacy.html"
+ROBOTS_FILE = BASE_DIR / "robots.txt"
+SITEMAP_FILE = BASE_DIR / "sitemap.xml"
 
 
 @asynccontextmanager
@@ -34,7 +39,7 @@ async def lifespan(app: FastAPI):
     from keepalive import keepalive_loop
 
     logging.basicConfig(level=logging.INFO)
-    logging.info("🚀 Focus OS стартує... PORT=%s WEBAPP_URL=%s",
+    logging.info("🚀 Focus ON стартує... PORT=%s WEBAPP_URL=%s",
                  os.getenv("PORT"), os.getenv("WEBAPP_URL", "(не задано)"))
     task = asyncio.create_task(keepalive_loop())
     # Реєструємо webhook для прийому Telegram updates (платежі Stars, /start тощо)
@@ -70,7 +75,7 @@ async def _setup_webhook() -> None:
         logging.getLogger("webhook").warning("setWebhook виключення: %s", e)
 
 
-app = FastAPI(title="Focus OS API", lifespan=lifespan)
+app = FastAPI(title="Focus ON API", lifespan=lifespan)
 
 # Ініціалізуємо БД при старті
 db.init_db()
@@ -78,12 +83,12 @@ db.init_db()
 
 @app.middleware("http")
 async def disable_caching(request: Request, call_next):
-    """Вимикає кешування для /static/* і / — Telegram WebView інакше тримає
-    стару версію JS/CSS навіть зі зміною ?v=. no-cache дозволяє 304-валідацію,
-    але примусово перечитує при зміні."""
+    """Вимикає кешування для Mini App, лендінгу та статичних файлів.
+    Telegram WebView і браузери інакше можуть тримати стару версію JS/CSS
+    навіть після нового деплою."""
     response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.startswith("/static/"):
+    if path in {"/", "/landing", "/privacy"} or path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
@@ -237,6 +242,14 @@ def _client_ip(request: Request) -> str:
     if xff:
         return xff.split(",")[0].strip()
     return request.client.host if request.client else ""
+
+
+def _with_query_param(url: str, key: str, value: str) -> str:
+    """Безпечно додає query-параметр, не стираючи наявні параметри URL."""
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query[key] = value
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 async def _notify_admin(message: str) -> None:
@@ -722,7 +735,7 @@ async def api_subscribe(user: dict = Depends(current_user)):
     order_id = f"focus-{user['id']}-{int(time.time())}"
     invoice = await _send_stars_invoice(
         chat_id=user["id"],
-        title=f"Focus OS Premium — {settings.PREMIUM_DURATION_DAYS} днів",
+        title=f"Focus ON Premium — {settings.PREMIUM_DURATION_DAYS} днів",
         description="Детальна статистика, графіки прогресу, серії, безліміт треків.",
         payload=order_id,
         stars=settings.PREMIUM_PRICE_STARS,
@@ -822,10 +835,13 @@ async def _handle_update(update: dict) -> None:
         await _process_stars_payment(sp, chat_id)
         return
 
-    # текстові команди
+    # текстові команди. Підтримуємо також /start <payload> із лендінгу.
     text = (message.get("text") or "").strip()
-    if text in ("/start", "/help", "/app"):
-        await _send_welcome(chat_id)
+    command, _, command_payload = text.partition(" ")
+    command = command.split("@", 1)[0].lower()
+    if command in ("/start", "/help", "/app"):
+        start_param = command_payload.strip()[:64] if command == "/start" else ""
+        await _send_welcome(chat_id, start_param=start_param)
 
 
 async def _answer_pre_checkout(query_id: int, ok: bool, error_message: str = "") -> None:
@@ -871,21 +887,30 @@ async def _process_stars_payment(sp: dict, chat_id: int) -> None:
     )
 
 
-async def _send_welcome(chat_id: int) -> None:
-    """Вітальне повідомлення з кнопкою відкриття Mini App."""
+async def _send_welcome(chat_id: int, start_param: str = "") -> None:
+    """Вітальне повідомлення з кнопкою відкриття Mini App.
+
+    Якщо користувач прийшов із рекламного deep link ``?start=...``, коротка
+    атрибуційна мітка передається у URL Mini App як ``start_param``.
+    """
     if not settings.has_token or not settings.WEBAPP_URL:
         return
+
+    web_app_url = settings.WEBAPP_URL
+    if start_param:
+        web_app_url = _with_query_param(web_app_url, "start_param", start_param)
+
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             await c.post(
                 f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
                 json={
                     "chat_id": chat_id,
-                    "text": "🎯 Focus OS — таймер фокусу з музикою та статистикою.\nНатисни кнопку, щоб відкрити застосунок.",
+                    "text": "🎯 Focus ON — таймер фокусу з музикою та статистикою.\nНатисни кнопку, щоб відкрити застосунок.",
                     "reply_markup": {
                         "inline_keyboard": [[{
-                            "text": "🚀 Відкрити Focus OS",
-                            "web_app": {"url": settings.WEBAPP_URL},
+                            "text": "🚀 Відкрити Focus ON",
+                            "web_app": {"url": web_app_url},
                         }]]
                     },
                 },
@@ -1044,7 +1069,7 @@ async def api_play_in_background(payload: PlayTrackReq, user: dict = Depends(cur
     if row["kind"] != "audio":
         raise HTTPException(status_code=400, detail="фонове відтворення лише для прямих аудіо-URL")
     url = row["url"]
-    title = row["title"] or payload.title or "Focus OS"
+    title = row["title"] or payload.title or "Focus ON"
     # sendAudio через Bot API — Telegram сам завантажить і відправить в чат
     if not settings.has_token:
         raise HTTPException(status_code=400, detail="бот не налаштований")
@@ -1056,7 +1081,7 @@ async def api_play_in_background(payload: PlayTrackReq, user: dict = Depends(cur
                     "chat_id": user["id"],
                     "audio": url,
                     "title": title[:100],
-                    "caption": "🎵 " + title + " — Focus OS",
+                    "caption": "🎵 " + title + " — Focus ON",
                 },
             )
             data = r.json()
@@ -1109,6 +1134,47 @@ async def api_bug_report(
     )
     await _notify_admin(msg)
     return {"ok": True, "id": report_id}
+
+
+# ------------------------------ Публічні сторінки ---------------------------
+
+
+def _public_file(path: Path, media_type: str, *, cache_seconds: int = 0):
+    """Повертає публічний файл із зрозумілою помилкою, якщо його не додано."""
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"{path.name} не знайдено")
+    cache_control = (
+        f"public, max-age={cache_seconds}"
+        if cache_seconds > 0
+        else "no-store, no-cache, must-revalidate, max-age=0"
+    )
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={"Cache-Control": cache_control},
+    )
+
+
+@app.get("/landing", include_in_schema=False)
+async def landing_page():
+    """Маркетинговий лендінг для Google Ads та інших рекламних джерел."""
+    return _public_file(LANDING_FILE, "text/html; charset=utf-8")
+
+
+@app.get("/privacy", include_in_schema=False)
+async def privacy_page():
+    """Політика конфіденційності Focus ON."""
+    return _public_file(PRIVACY_FILE, "text/html; charset=utf-8")
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    return _public_file(ROBOTS_FILE, "text/plain; charset=utf-8", cache_seconds=3600)
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml():
+    return _public_file(SITEMAP_FILE, "application/xml; charset=utf-8", cache_seconds=3600)
 
 
 # ------------------------------ Mini App сторінка ---------------------------

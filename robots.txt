@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /landing
+Allow: /privacy
+Disallow: /api/
+Sitemap: https://focus-on.onrender.com/sitemap.xml
