@@ -417,6 +417,26 @@ async def api_stats(user: dict = Depends(current_user)):
     return db.get_stats(user["id"])
 
 
+@app.get("/api/stats/today")
+async def api_stats_today(user: dict = Depends(current_user)):
+    """Прогрес на сьогодні + серія для головного екрана (безкоштовно).
+    Легкий запит — лише сума за сьогодні + серія, без повної агрегації."""
+    _ensure_user_exists(user)
+    return db.get_daily_progress(user["id"])
+
+
+class DailyGoalReq(BaseModel):
+    seconds: int = Field(..., ge=300, le=86400, description="ціль у секундах (5хв..24год)")
+
+
+@app.put("/api/daily-goal")
+async def api_set_daily_goal(payload: DailyGoalReq, user: dict = Depends(current_user)):
+    """Встановлює щоденну ціль фокусу (у секундах)."""
+    _ensure_user_exists(user)
+    val = db.set_daily_goal(user["id"], payload.seconds)
+    return {"ok": True, "daily_goal_seconds": val}
+
+
 @app.get("/api/network/payload")
 async def api_network_payload(request: Request):
     """Повертає фіксований payload (~256КБ) для вимірювання швидкості завантаження клієнтом.

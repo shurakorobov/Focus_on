@@ -230,6 +230,8 @@ def migrate() -> None:
         _add_column(conn, "users", "plan", "TEXT NOT NULL DEFAULT 'free'")
         _add_column(conn, "users", "plan_expires_at", "TEXT NOT NULL DEFAULT ''")
         _add_column(conn, "users", "upload_count", "INTEGER NOT NULL DEFAULT 0")
+        # Щоденна ціль фокусу (за замовч. 2 години), для відображення на головному екрані
+        _add_column(conn, "users", "daily_goal_seconds", "INTEGER NOT NULL DEFAULT 7200")
         # PostgreSQL: tg_id INTEGER → BIGINT (Telegram ID > 2.1 млрд)
         if _IS_PG:
             _pg_alter_to_bigint(conn)
@@ -588,6 +590,82 @@ def get_stats(tg_id: int, limit: int = 50) -> dict:
     }
 
 
+def _compute_streak(conn, tg_id: int) -> tuple[int, int]:
+    """Обчислює поточну та найкращу серію (streak) по днях із завершеними
+    сесіями. Повертає (current_streak, best_streak). Спільна логіка для
+    безкоштовного (головний екран) та преміум (деталі) шляхів."""
+    days = conn.execute(
+        """
+        SELECT DISTINCT date(finished_at) AS d
+        FROM sessions WHERE tg_id = ? AND completed = 1
+        ORDER BY d DESC
+        """,
+        (tg_id,),
+    ).fetchall()
+
+    # поточна серія: дозволяємо «сьогодні ще немає сесії» → починаємо з учора
+    streak = 0
+    today_date = datetime.now(timezone.utc).date()
+    day_set = {row["d"] for row in days}
+    cursor = today_date
+    if today_date.isoformat() not in day_set:
+        cursor = today_date - timedelta(days=1)
+    while cursor.isoformat() in day_set:
+        streak += 1
+        cursor = cursor - timedelta(days=1)
+
+    # найкраща серія: найдовший ряд послідовних днів
+    best_streak = 0
+    if days:
+        sorted_days = sorted({row["d"] for row in days})
+        cur = 1
+        best_streak = 1
+        for i in range(1, len(sorted_days)):
+            prev = datetime.fromisoformat(sorted_days[i - 1]).date()
+            this = datetime.fromisoformat(sorted_days[i]).date()
+            if (this - prev).days == 1:
+                cur += 1
+                best_streak = max(best_streak, cur)
+            else:
+                cur = 1
+
+    return streak, best_streak
+
+
+def get_daily_progress(tg_id: int) -> dict:
+    """Прогрес на сьогодні + серія для головного екрана (безкоштовно).
+    Повертає {today_seconds, daily_goal_seconds, streak, best_streak}."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    with get_conn() as conn:
+        today_row = conn.execute(
+            "SELECT COALESCE(SUM(actual), 0) AS s FROM sessions WHERE tg_id = ? AND completed = 1 AND date(finished_at) = ?",
+            (tg_id, today),
+        ).fetchone()
+        goal_row = conn.execute(
+            "SELECT daily_goal_seconds FROM users WHERE tg_id = ?", (tg_id,)
+        ).fetchone()
+        streak, best_streak = _compute_streak(conn, tg_id)
+
+    goal = int(goal_row["daily_goal_seconds"]) if goal_row and goal_row["daily_goal_seconds"] else 7200
+    return {
+        "today_seconds": int(today_row["s"]),
+        "daily_goal_seconds": goal,
+        "streak": streak,
+        "best_streak": best_streak,
+    }
+
+
+def set_daily_goal(tg_id: int, seconds: int) -> int:
+    """Встановлює щоденну ціль фокусу (у секундах). Повертає нове значення."""
+    seconds = max(300, min(seconds, 24 * 3600))  # обмеження 5хв..24год
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE users SET daily_goal_seconds = ? WHERE tg_id = ?",
+            (seconds, tg_id),
+        )
+    return seconds
+
+
 def _range_start(range_key: str) -> datetime | None:
     """Повертає початок періоду (UTC) або None = весь час."""
     now = datetime.now(timezone.utc)
@@ -653,41 +731,8 @@ def get_stats_premium(tg_id: int, range_key: str = "month", category: str | None
             (tg_id,),
         ).fetchall()
 
-        # серія (streak) по днях із завершеними сесіями
-        days = conn.execute(
-            """
-            SELECT DISTINCT date(finished_at) AS d
-            FROM sessions WHERE tg_id = ? AND completed = 1
-            ORDER BY d DESC
-            """,
-            (tg_id,),
-        ).fetchall()
-
-    # рахуємо поточну серію
-    streak = 0
-    today_date = datetime.now(timezone.utc).date()
-    day_set = {row["d"] for row in days}
-    cursor = today_date
-    # дозволяємо "сьогодні ще немає сесії" — починаємо з учора
-    if today_date.isoformat() not in day_set:
-        cursor = today_date - timedelta(days=1)
-    while cursor.isoformat() in day_set:
-        streak += 1
-        cursor = cursor - timedelta(days=1)
-
-    best_streak = 0
-    if days:
-        sorted_days = sorted({row["d"] for row in days})
-        cur = 1
-        best_streak = 1
-        for i in range(1, len(sorted_days)):
-            prev = datetime.fromisoformat(sorted_days[i - 1]).date()
-            this = datetime.fromisoformat(sorted_days[i]).date()
-            if (this - prev).days == 1:
-                cur += 1
-                best_streak = max(best_streak, cur)
-            else:
-                cur = 1
+        # серія (streak) — спільна логіка з безкоштовним шляхом
+        streak, best_streak = _compute_streak(conn, tg_id)
 
     return {
         "range": range_key,

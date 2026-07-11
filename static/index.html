@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f5f0fa" media="(prefers-color-scheme: light)" />
   <title>Focus ON</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260711f" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260711g" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -26,6 +26,18 @@
       <div class="timer-center">
         <div class="time-display" id="time-display">25:00</div>
         <div class="phase-label" id="phase-label">Натисни, щоб почати</div>
+      </div>
+    </div>
+
+    <!-- Серія + ціль на день -->
+    <div class="focus-meta" id="focus-meta">
+      <div class="streak-chip cold" id="streak-chip">🔥 <span id="streak-val">0</span></div>
+      <div class="goal-track" id="goal-track">
+        <div class="goal-label">
+          <span>Ціль на день</span>
+          <span id="goal-progress">0 хв / 2 год</span>
+        </div>
+        <div class="goal-bar"><div class="goal-fill" id="goal-fill" style="width:0%"></div></div>
       </div>
     </div>
 
@@ -89,12 +101,36 @@
     </div>
   </section>
 
-  <!-- ===== Екран: Музика ===== -->
+  <!-- ===== Екран: Музика / Звуки ===== -->
   <section id="screen-music" class="screen">
-    <div class="music-filter">
-      <div class="chips" id="music-category-chips"></div>
+    <div class="media-seg" id="media-seg">
+      <button class="seg-mini active" data-sub="music">🎵 Музика</button>
+      <button class="seg-mini" data-sub="sounds">🌊 Звуки</button>
     </div>
-    <div class="music-scroll" id="track-list"></div>
+
+    <!-- Панель: Музика -->
+    <div class="music-pane" id="pane-music">
+      <div class="music-filter">
+        <div class="chips" id="music-category-chips"></div>
+      </div>
+      <div class="music-scroll" id="track-list"></div>
+    </div>
+
+    <!-- Панель: Звуки (ambient mixer) -->
+    <div class="sounds-pane hidden" id="pane-sounds">
+      <div class="sounds-scroll">
+        <div class="sounds-hint">Увімкни звуки й міксуй їх поверх музики. Гучність кожного окремо.</div>
+        <div class="sound-grid" id="sound-grid"></div>
+
+        <div class="group-title" style="margin-top:4px;">Пресети</div>
+        <div class="sounds-presets" id="sound-presets"></div>
+
+        <div class="sounds-save-row">
+          <input type="text" id="preset-name-input" placeholder="Назва міксу" maxlength="24" autocomplete="off" />
+          <button id="btn-save-preset">Зберегти</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- ===== Екран: Профіль ===== -->
@@ -287,8 +323,20 @@
   <audio id="audio-el" preload="auto" playsinline webkit-playsinline></audio>
   <div id="yt-container" class="hidden"></div>
 
-  <script src="/static/api.js?v=20260711f"></script>
-  <script src="/static/cache.js?v=20260711f"></script>
-  <script src="/static/app.js?v=20260711f"></script>
+  <!-- ===== Onboarding overlay (перший вхід) ===== -->
+  <div class="onboard-overlay hidden" id="onboard-overlay"></div>
+  <div class="onboard-tip hidden" id="onboard-tip">
+    <div class="onboard-dots" id="onboard-dots"></div>
+    <h3 id="onboard-title"></h3>
+    <p id="onboard-text"></p>
+    <div class="onboard-actions">
+      <button class="onboard-skip" id="onboard-skip">Пропустити</button>
+      <button class="onboard-next" id="onboard-next">Далі</button>
+    </div>
+  </div>
+
+  <script src="/static/api.js?v=20260711g"></script>
+  <script src="/static/cache.js?v=20260711g"></script>
+  <script src="/static/app.js?v=20260711g"></script>
 </body>
 </html>

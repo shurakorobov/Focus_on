@@ -59,6 +59,9 @@ const API = (() => {
     modes: () => request("GET", "/api/modes"),
     categories: () => request("GET", "/api/categories"),
     stats: () => request("GET", "/api/stats"),
+    statsToday: () => request("GET", "/api/stats/today"),
+    setDailyGoal: (seconds) =>
+      request("PUT", "/api/daily-goal", { json: { seconds } }),
     statsPremium: (range = "month", category = "") =>
       request("GET", "/api/stats/premium", {
         params: { range, ...(category ? { category } : {}) },

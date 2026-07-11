@@ -217,10 +217,29 @@
     $$(".screen").forEach((s) => s.classList.remove("active"));
     $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.screen === name));
     $("#screen-" + name).classList.add("active");
-    $("#page-title").textContent = TITLES[name] || "";
+    if (name === "timer") {
+      updateGreeting();
+    } else {
+      $("#page-title").textContent = TITLES[name] || "";
+    }
     if (name === "stats") loadStats();
     if (name === "music") Music.load();
     if (name === "profile") loadProfile();
+  }
+
+  // ---------- Динамічний привіт (на головному екрані) ----------
+  function greeting() {
+    // Київ UTC+2 (спрощено; без DST — для привіту достатньо)
+    const h = (new Date().getUTCHours() + 2) % 24;
+    if (h >= 5 && h < 11) return "Доброго ранку";
+    if (h >= 11 && h < 18) return "Привіт";
+    if (h >= 18 && h < 22) return "Доброго вечора";
+    return "Гарної ночі";
+  }
+  function updateGreeting() {
+    const u = (state.me && state.me.user) || {};
+    const name = u.first_name || u.username || "";
+    $("#page-title").textContent = greeting() + (name ? ", " + name : "") + "!";
   }
 
   // ---------- Таймер ----------
@@ -284,6 +303,7 @@
     state.remaining = state.totalSeconds;
     Music.stopAudio(true);
     setFabIcon(false);
+    $("#timer-wrap").classList.remove("running");
     $("#phase-label").textContent = "Скинуто · тап щоб почати";
     renderTimer();
     haptic("med");
@@ -296,6 +316,7 @@
     state.startedAt = new Date().toISOString();
     state.tickerId = setInterval(tick, 1000);
     setFabIcon(true);
+    $("#timer-wrap").classList.add("running");
     $("#phase-label").textContent = "У фокусі · тап для паузи";
     haptic("light");
     // якщо трек не обраний — обираємо перший доступний (закріплений → бажаний → демо)
@@ -313,6 +334,7 @@
     clearInterval(state.tickerId);
     state.tickerId = null;
     setFabIcon(false);
+    $("#timer-wrap").classList.remove("running");
     $("#phase-label").textContent = "Пауза · тап для продовження";
     // ставимо музику на паузу
     Music.pauseAudio();
@@ -323,6 +345,7 @@
     state.tickerId = null;
     state.running = false;
     setFabIcon(false);
+    $("#timer-wrap").classList.remove("running");
 
     // зупиняємо музику
     Music.stopAudio(true);
@@ -354,6 +377,8 @@
     } catch (e) {
       console.warn("Сесія не збережена:", e.message);
     }
+    // оновлюємо серію + ціль на головному екрані
+    refreshFocusMeta();
   }
 
   // ---------- Профіль ----------
@@ -381,8 +406,40 @@
         $("#admin-dashboard").classList.add("hidden");
         stopAdminSSE();
       }
+      // привіт + серія/ціль на головному екрані
+      updateGreeting();
+      refreshFocusMeta();
     } catch (e) {
       $("#profile-head").innerHTML = '<div class="hint-inline">Не вдалося завантажити профіль</div>';
+    }
+  }
+
+  // ---------- Серія + ціль на день (головний екран) ----------
+  async function refreshFocusMeta() {
+    try {
+      const d = await API.statsToday();
+      renderFocusMeta(d);
+    } catch (e) {}
+  }
+
+  function renderFocusMeta(d) {
+    const streak = d.streak || 0;
+    const today = d.today_seconds || 0;
+    const goal = d.daily_goal_seconds || 7200;
+
+    const streakChip = $("#streak-chip");
+    const streakVal = $("#streak-val");
+    if (streakVal) streakVal.textContent = streak;
+    if (streakChip) streakChip.classList.toggle("cold", streak === 0);
+
+    const pct = Math.min(100, Math.round((today / goal) * 100));
+    const fill = $("#goal-fill");
+    if (fill) fill.style.width = pct + "%";
+    const prog = $("#goal-progress");
+    if (prog) {
+      prog.innerHTML = (pct >= 100
+        ? '<span class="goal-done">Ціль виконано! 🎉</span>'
+        : human(today) + " / " + human(goal));
     }
   }
 
@@ -1804,6 +1861,17 @@
       else window.open(url, "_blank");
     });
 
+    // зміна цілі на день — тап по goal-track
+    const goalTrack = $("#goal-track");
+    if (goalTrack) goalTrack.addEventListener("click", openGoalPicker);
+    const streakChip = $("#streak-chip");
+    if (streakChip) streakChip.style.cursor = "default";
+
+    // сегмент-перемикач Музика | Звуки
+    $$("#media-seg .seg-mini").forEach((b) => {
+      b.addEventListener("click", () => switchMediaSub(b.dataset.sub));
+    });
+
     // промокод — активувати (юзер)
     $("#btn-redeem").addEventListener("click", async () => {
       const code = $("#promo-input").value.trim();
@@ -2173,6 +2241,8 @@
           }
           Music._refreshPlayStates();
         }
+        // відновлюємо ambient-звуки після згортання
+        if (typeof Sounds !== "undefined") Sounds.resume();
       }, 300);
     });
     // окремо: focus повернувся до вікна
@@ -2186,6 +2256,411 @@
     });
   }
 
+  // ---------- Музика | Звуки: сегмент-перемикач ----------
+  function switchMediaSub(sub) {
+    $$("#media-seg .seg-mini").forEach((b) => b.classList.toggle("active", b.dataset.sub === sub));
+    $("#pane-music").classList.toggle("hidden", sub !== "music");
+    $("#pane-sounds").classList.toggle("hidden", sub !== "sounds");
+    if (sub === "music") Music.load();
+    else Sounds.render();
+  }
+
+  // ---------- Ціль на день: вибір ----------
+  function openGoalPicker() {
+    // простий вибір через toast-подібні чіпи в action sheet (використовуємо bug-modal-стиль)
+    const opts = [
+      { s: 1800, label: "30 хв" },
+      { s: 3600, label: "1 год" },
+      { s: 7200, label: "2 год" },
+      { s: 14400, label: "4 год" },
+    ];
+    const cur = $("#goal-fill") ? null : null;
+    // будуємо тимчасовий sheet
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = '<div class="sheet" style="text-align:center;">' +
+      '<div class="sheet-handle"></div>' +
+      '<h3 style="margin:0 0 16px;">Ціль на день</h3>' +
+      opts.map((o) => '<button class="action-row" data-sec="' + o.s + '">' + o.label + '</button>').join("") +
+      '<div class="sheet-divider"></div>' +
+      '<button class="action-row cancel" data-sec="0">Скасувати</button>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll("button[data-sec]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const sec = parseInt(btn.dataset.sec);
+        overlay.remove();
+        if (sec === 0) return;
+        try {
+          await API.setDailyGoal(sec);
+          toast("Ціль: " + human(sec));
+          haptic("light");
+          refreshFocusMeta();
+        } catch (e) { toast("Не вдалось зберегти"); }
+      });
+    });
+    // тап по фону = закрити
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  }
+
+  // ---------- Звуки (ambient mixer, Web Audio) ----------
+  const SOUND_CHANNELS = [
+    { id: "rain", emoji: "🌧", name: "Дощ", type: "rain" },
+    { id: "cafe", emoji: "☕", name: "Кафе", type: "cafe" },
+    { id: "fire", emoji: "🔥", name: "Вогнище", type: "fire" },
+    { id: "ocean", emoji: "🌊", name: "Океан", type: "ocean" },
+    { id: "forest", emoji: "🌲", name: "Ліс", type: "forest" },
+    { id: "white", emoji: "🤍", name: "White noise", type: "white" },
+    { id: "brown", emoji: "🟤", name: "Brown noise", type: "brown" },
+    { id: "wind", emoji: "🌬", name: "Вітер", type: "wind" },
+  ];
+
+  // типові пресети (підказки, не зберігаються)
+  const SOUND_BUILTIN_PRESETS = [
+    { name: "🌿 Концентрація", mix: { brown: 0.5, rain: 0.4 } },
+    { name: "😴 Сон", mix: { brown: 0.6, ocean: 0.4 } },
+    { name: "📚 Навчання", mix: { cafe: 0.5, rain: 0.3 } },
+  ];
+
+  const Sounds = (() => {
+    let nodes = {}; // id -> { source, gain, filter, lfo? }
+    let active = {}; // id -> volume 0..1
+
+    // --- генерація шумових буферів ---
+    let _noiseCache = {};
+    function noiseBuffer(ctx, type) {
+      if (_noiseCache[type]) return _noiseCache[type];
+      const len = ctx.sampleRate * 2; // 2 секунди луп
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      if (type === "white") {
+        for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      } else if (type === "brown" || type === "pink" || type === "rain") {
+        // brown/pink: інтегратор для м'якшого низу
+        let last = 0;
+        const alpha = type === "brown" ? 0.02 : 0.05;
+        for (let i = 0; i < len; i++) {
+          const white = Math.random() * 2 - 1;
+          last = (last + alpha * white) / (1 + alpha);
+          data[i] = last * 3.5;
+        }
+      } else {
+        // за замовч. білий
+        for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      }
+      _noiseCache[type] = buf;
+      return buf;
+    }
+
+    function startChannel(ch) {
+      const ctx = audioCtx();
+      if (!ctx) return;
+      if (ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
+
+      const t = ch.type;
+      const src = ctx.createBufferSource();
+      // базовий шум для типу
+      const noiseType = (t === "cafe" || t === "forest") ? "pink"
+        : (t === "white") ? "white"
+        : "brown";
+      src.buffer = noiseBuffer(ctx, noiseType);
+      src.loop = true;
+
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+
+      // характер звуку через фільтр
+      if (t === "rain") { filter.type = "bandpass"; filter.frequency.value = 1200; filter.Q.value = 0.6; }
+      else if (t === "cafe") { filter.type = "lowpass"; filter.frequency.value = 800; }
+      else if (t === "fire") { filter.type = "lowpass"; filter.frequency.value = 500; }
+      else if (t === "ocean") { filter.type = "lowpass"; filter.frequency.value = 600; }
+      else if (t === "forest") { filter.type = "highpass"; filter.frequency.value = 1000; }
+      else if (t === "wind") { filter.type = "bandpass"; filter.frequency.value = 400; filter.Q.value = 0.4; }
+      else if (t === "white") { filter.type = "allpass"; }
+      else if (t === "brown") { filter.type = "lowpass"; filter.frequency.value = 400; }
+
+      src.connect(filter).connect(gain).connect(ctx.destination);
+
+      // LFO для ocean/wind (хвилі/пориви)
+      let lfo = null, lfoGain = null;
+      if (t === "ocean" || t === "wind") {
+        lfo = ctx.createOscillator();
+        lfoGain = ctx.createGain();
+        lfo.frequency.value = t === "ocean" ? 0.12 : 0.2;
+        lfoGain.gain.value = 0.04;
+        lfo.connect(lfoGain).connect(gain.gain);
+        lfo.start();
+      }
+
+      src.start();
+      gain.gain.setTargetAtTime(active[ch.id] || 0.5, ctx.currentTime, 0.3);
+
+      nodes[ch.id] = { source: src, gain, filter, lfo, lfoGain };
+    }
+
+    function stopChannel(id) {
+      const n = nodes[id];
+      if (!n) return;
+      try {
+        const ctx = audioCtx();
+        if (ctx) n.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.15);
+        setTimeout(() => {
+          try { n.source.stop(); } catch (e) {}
+          try { if (n.lfo) n.lfo.stop(); } catch (e) {}
+        }, 250);
+      } catch (e) {}
+      delete nodes[id];
+    }
+
+    function setVolume(id, vol) {
+      active[id] = vol;
+      const n = nodes[id];
+      const ctx = audioCtx();
+      if (n && ctx) n.gain.gain.setTargetAtTime(vol, ctx.currentTime, 0.1);
+    }
+
+    function toggle(ch) {
+      const ctx = audioCtx();
+      if (ctx && ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
+      if (active[ch.id]) {
+        stopChannel(ch.id);
+        delete active[ch.id];
+      } else {
+        active[ch.id] = 0.6;
+        startChannel(ch);
+      }
+      saveMix();
+      render(); // оновити UI
+    }
+
+    function applyMix(mix) {
+      // зупинити все, потім увімкнути з міксу
+      Object.keys(nodes).forEach(stopChannel);
+      active = {};
+      const ctx = audioCtx();
+      if (ctx && ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
+      Object.keys(mix).forEach((id) => {
+        const ch = SOUND_CHANNELS.find((c) => c.id === id);
+        if (!ch) return;
+        active[id] = mix[id];
+        startChannel(ch);
+      });
+      saveMix();
+      render();
+    }
+
+    function loadMix() {
+      try {
+        const m = JSON.parse(localStorage.getItem("focus-ambient-mix") || "{}");
+        active = {};
+        Object.keys(m).forEach((k) => { if (typeof m[k] === "number") active[k] = m[k]; });
+      } catch (e) { active = {}; }
+    }
+
+    function saveMix() {
+      try { localStorage.setItem("focus-ambient-mix", JSON.stringify(active)); } catch (e) {}
+    }
+
+    function render() {
+      const grid = $("#sound-grid");
+      if (!grid) return;
+      grid.innerHTML = SOUND_CHANNELS.map((ch) => {
+        const on = !!active[ch.id];
+        const vol = active[ch.id] != null ? Math.round(active[ch.id] * 100) : 60;
+        return '<div class="sound-card' + (on ? " active" : "") + '" data-id="' + ch.id + '">' +
+          '<div class="sound-emoji">' + ch.emoji + '</div>' +
+          '<div class="sound-name">' + ch.name + '</div>' +
+          '<input type="range" class="sound-volume" min="0" max="100" value="' + vol + '" data-id="' + ch.id + '" />' +
+          '</div>';
+      }).join("");
+
+      // тап по картці = вкл/викл
+      grid.querySelectorAll(".sound-card").forEach((card) => {
+        card.addEventListener("click", (e) => {
+          if (e.target.classList.contains("sound-volume")) return; // слайдер окремо
+          const id = card.dataset.id;
+          const ch = SOUND_CHANNELS.find((c) => c.id === id);
+          if (ch) { toggle(ch); haptic("light"); }
+        });
+      });
+      // слайдер гучності
+      grid.querySelectorAll(".sound-volume").forEach((slider) => {
+        slider.addEventListener("input", (e) => {
+          e.stopPropagation();
+          const id = slider.dataset.id;
+          setVolume(id, parseInt(slider.value) / 100);
+        });
+        slider.addEventListener("click", (e) => e.stopPropagation());
+        slider.addEventListener("change", () => saveMix());
+      });
+
+      renderPresets();
+    }
+
+    function getPresets() {
+      try { return JSON.parse(localStorage.getItem("focus-ambient-presets") || "[]"); }
+      catch (e) { return []; }
+    }
+    function setPresets(arr) {
+      try { localStorage.setItem("focus-ambient-presets", JSON.stringify(arr)); } catch (e) {}
+    }
+
+    function renderPresets() {
+      const el = $("#sound-presets");
+      if (!el) return;
+      const saved = getPresets();
+      const all = SOUND_BUILTIN_PRESETS.concat(saved.map((p) => ({ name: p.name, mix: p.mix, saved: true })));
+      el.innerHTML = all.map((p, i) =>
+        '<button class="preset-chip" data-idx="' + i + '">' + escapeHtml(p.name) +
+          (p.saved ? '<span class="preset-del" data-del="' + i + '">✕</span>' : '') +
+        '</button>'
+      ).join("");
+      el.querySelectorAll(".preset-chip").forEach((chip) => {
+        chip.addEventListener("click", (e) => {
+          if (e.target.classList.contains("preset-del")) {
+            e.stopPropagation();
+            const idx = parseInt(e.target.dataset.del);
+            const saved = getPresets();
+            const realIdx = idx - SOUND_BUILTIN_PRESETS.length;
+            if (realIdx >= 0 && realIdx < saved.length) {
+              saved.splice(realIdx, 1);
+              setPresets(saved);
+              render();
+            }
+            return;
+          }
+          const p = all[parseInt(chip.dataset.idx)];
+          if (p) { applyMix(p.mix); haptic("light"); }
+        });
+      });
+    }
+
+    return {
+      init() {
+        loadMix();
+        // кнопка «зберегти мікс»
+        const saveBtn = $("#btn-save-preset");
+        if (saveBtn) saveBtn.addEventListener("click", () => {
+          const name = ($("#preset-name-input").value || "").trim();
+          if (!name) { toast("Введи назву"); return; }
+          if (Object.keys(active).length === 0) { toast("Увімкни хоч один звук"); return; }
+          const saved = getPresets();
+          saved.push({ name, mix: Object.assign({}, active) });
+          setPresets(saved);
+          $("#preset-name-input").value = "";
+          toast("Збережено: " + name);
+          render();
+        });
+      },
+      render,
+      resume() {
+        // WebKit зупиняє AudioContext при згортанні — відновлюємо активні канали
+        const ctx = audioCtx();
+        if (!ctx) return;
+        if (ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
+        // перезапускаємо зупинені джерела
+        Object.keys(active).forEach((id) => {
+          if (!nodes[id]) {
+            const ch = SOUND_CHANNELS.find((c) => c.id === id);
+            if (ch) startChannel(ch);
+          }
+        });
+      },
+    };
+  })();
+
+  // ---------- Onboarding (3 кроки, перший вхід) ----------
+  const ONBOARD_STEPS = [
+    { sel: "#timer-wrap", title: "Тапни по колу 👆", text: "Натисни на таймер, щоб почати фокус-сесію. Тап = старт/пауза, довге утримання = скинути." },
+    { sel: "#timer-category-chips", title: "Обери, над чим працюєш 🎯", text: "Перед стартом обери категорію — так статистика буде точнішою (DeepWork, Навчання, Креатив тощо)." },
+    { sel: 'button.tab[data-screen="music"]', title: "Музика та звуки 🎵🌊", text: "На вкладці «Музика» додай свої треки або увімкни ambient-звуки (дощ, кафе, вогонь) — вони міксуються поверх музики." },
+  ];
+
+  function onboardingDone() {
+    try { return localStorage.getItem("focus-onboarding-done") === "1"; } catch (e) { return false; }
+  }
+  function markOnboardingDone() {
+    try { localStorage.setItem("focus-onboarding-done", "1"); } catch (e) {}
+  }
+  function startOnboarding() {
+    if (onboardingDone()) return;
+    const overlay = $("#onboard-overlay");
+    const tip = $("#onboard-tip");
+    if (!overlay || !tip) return;
+    let step = 0;
+    overlay.classList.remove("hidden");
+    tip.classList.remove("hidden");
+
+    function showStep(i) {
+      step = i;
+      const s = ONBOARD_STEPS[i];
+      // крапки
+      const dots = $("#onboard-dots");
+      dots.innerHTML = ONBOARD_STEPS.map((_, idx) =>
+        '<span class="onboard-dot' + (idx === i ? " active" : "") + '"></span>'
+      ).join("");
+      $("#onboard-title").textContent = s.title;
+      $("#onboard-text").textContent = s.text;
+      $("#onboard-next").textContent = i === ONBOARD_STEPS.length - 1 ? "Готово" : "Далі";
+
+      // позиціонуємо spotlight: величезна тіня навколо цільового елемента
+      const target = document.querySelector(s.sel);
+      if (target) {
+        const r = target.getBoundingClientRect();
+        const pad = 8;
+        overlay.style.background = "rgba(0,0,0,0)";
+        overlay.style.boxShadow =
+          "0 0 0 9999px rgba(0,0,0,0.72)";
+        overlay.style.borderRadius = "0";
+        overlay.style.clipPath =
+          "polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, " +
+          (r.left - pad) + "px " + (r.top - pad) + "px, " +
+          (r.left - pad) + "px " + (r.bottom + pad) + "px, " +
+          (r.right + pad) + "px " + (r.bottom + pad) + "px, " +
+          (r.right + pad) + "px " + (r.top - pad) + "px, " +
+          (r.left - pad) + "px " + (r.top - pad) + "px)";
+      }
+      // позиція підказки: під цільовим елементом або по центру
+      const tipCard = tip;
+      const target2 = document.querySelector(s.sel);
+      if (target2) {
+        const r = target2.getBoundingClientRect();
+        const below = r.bottom + 20;
+        if (below + 200 < window.innerHeight) {
+          tipCard.style.top = below + "px";
+          tipCard.style.bottom = "auto";
+        } else {
+          tipCard.style.bottom = (window.innerHeight - r.top + 20) + "px";
+          tipCard.style.top = "auto";
+        }
+      } else {
+        tipCard.style.top = "50%";
+        tipCard.style.bottom = "auto";
+      }
+    }
+
+    $("#onboard-next").onclick = () => {
+      haptic("light");
+      if (step < ONBOARD_STEPS.length - 1) {
+        showStep(step + 1);
+      } else {
+        finishOnboarding();
+      }
+    };
+    $("#onboard-skip").onclick = () => { haptic("light"); finishOnboarding(); };
+
+    function finishOnboarding() {
+      overlay.classList.add("hidden");
+      overlay.style.boxShadow = "";
+      overlay.style.clipPath = "";
+      tip.classList.add("hidden");
+      markOnboardingDone();
+    }
+
+    showStep(0);
+  }
+
   // ---------- Старт ----------
   async function init() {
     bindEvents();
@@ -2195,12 +2670,15 @@
     setupVisibilityHandler();
     setupCrashReporting();
     setupHeartbeat();
+    Sounds.init();
     selectMode("focus");
     setFabIcon(false);
     renderTimer();
     await loadProfile();
     // передзавантажуємо список треків, щоб pickDefaultTrack мав дані
     Music.load().catch(() => {});
+    // онбординг для новачків (після завантаження профілю)
+    setTimeout(startOnboarding, 600);
   }
 
   // ---------- Heartbeat: позначає користувача онлайн ----------
