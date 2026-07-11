@@ -78,11 +78,48 @@
     premiumPriceStars: 100,
     premiumRange: "month",     // діапазон на преміум-статистиці
     me: null,                  // кеш /api/me
+    premiumViewTracked: false,
+    launchStartParam: "",
   };
 
   // ---------- DOM ----------
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => document.querySelectorAll(s);
+
+  // ---------- Аналітика GA4 + власна БД ----------
+  function launchStartParam() {
+    const qs = new URLSearchParams(window.location.search || "");
+    const fromTelegram = tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param;
+    return String(
+      fromTelegram || qs.get("start_param") || qs.get("tgWebAppStartParam") || ""
+    ).slice(0, 64);
+  }
+
+  function gaEvent(eventName, eventParams = {}) {
+    try {
+      if (typeof window.gtag === "function") {
+        window.gtag("event", eventName, eventParams);
+      }
+    } catch (e) {}
+  }
+
+  function trackEvent(eventName, eventParams = {}, persist = true) {
+    gaEvent(eventName, eventParams);
+    if (persist && typeof API !== "undefined" && typeof API.trackEvent === "function") {
+      API.trackEvent(eventName, eventParams).catch(() => {});
+    }
+  }
+
+  async function claimLaunchAttribution() {
+    const startParam = launchStartParam();
+    state.launchStartParam = startParam;
+    if (!startParam || typeof API === "undefined" || typeof API.claimAttribution !== "function") return;
+    try {
+      await API.claimAttribution(startParam);
+    } catch (e) {
+      console.warn("Атрибуцію не збережено:", e.message);
+    }
+  }
 
   // ---------- Утиліти ----------
   function fmt(sec) {
@@ -222,7 +259,10 @@
     } else {
       $("#page-title").textContent = TITLES[name] || "";
     }
-    if (name === "stats") loadStats();
+    if (name === "stats") {
+      trackEvent("stats_view", { is_premium: state.isPremium });
+      loadStats();
+    }
     if (name === "music") Music.load();
     if (name === "profile") loadProfile();
   }
@@ -298,6 +338,7 @@
 
   // STOP: довге утримання на таймері — повне скидання лічильника
   function stop() {
+    const elapsedBeforeStop = Math.max(0, state.totalSeconds - state.remaining);
     if (state.tickerId) { clearInterval(state.tickerId); state.tickerId = null; }
     state.running = false;
     state.remaining = state.totalSeconds;
@@ -308,12 +349,26 @@
     renderTimer();
     haptic("med");
     toast("Таймер скинуто");
+    trackEvent("timer_cancel", {
+      timer_mode: state.mode,
+      planned_seconds: state.totalSeconds,
+      elapsed_seconds: elapsedBeforeStop,
+      activity_category: state.category,
+    });
     // зберігаємо часткову сесію якщо щось відпрацювало
   }
 
   function start() {
+    const wasPaused = state.remaining < state.totalSeconds && !!state.startedAt;
     state.running = true;
     state.startedAt = new Date().toISOString();
+    trackEvent(wasPaused ? "timer_resume" : "timer_start", {
+      timer_mode: state.mode,
+      duration_minutes: Math.round(state.totalSeconds / 60),
+      activity_category: state.category,
+      music_selected: Boolean(state.selectedTrack),
+      custom_time: state.customMode,
+    });
     state.tickerId = setInterval(tick, 1000);
     setFabIcon(true);
     $("#timer-wrap").classList.add("running");
@@ -338,6 +393,11 @@
     $("#phase-label").textContent = "Пауза · тап для продовження";
     // ставимо музику на паузу
     Music.pauseAudio();
+    trackEvent("timer_pause", {
+      timer_mode: state.mode,
+      remaining_seconds: state.remaining,
+      activity_category: state.category,
+    });
   }
 
   async function finish(completed) {
@@ -374,6 +434,12 @@
 
     try {
       await API.finishSession(payload);
+      gaEvent(completed ? "focus_session_complete" : "focus_session_partial", {
+        timer_mode: state.mode,
+        planned_seconds: payload.planned,
+        actual_seconds: payload.actual,
+        activity_category: state.category,
+      });
     } catch (e) {
       console.warn("Сесія не збережена:", e.message);
     }
@@ -769,6 +835,11 @@
   }
 
   async function openSubscribe() {
+    trackEvent("checkout_start", {
+      item_id: "focus_on_premium_month",
+      currency: "XTR",
+      value: state.premiumPriceStars,
+    });
     try {
       const res = await API.subscribe();
       if (!res.available) {
@@ -781,6 +852,17 @@
           if (status === "paid") {
             toast("⭐ Преміум активовано!");
             haptic("success");
+            gaEvent("purchase", {
+              transaction_id: res.order_id || ("stars_" + Date.now()),
+              currency: "XTR",
+              value: state.premiumPriceStars,
+              items: [{
+                item_id: "focus_on_premium_month",
+                item_name: "Focus ON Premium — 1 month",
+                price: state.premiumPriceStars,
+                quantity: 1,
+              }],
+            });
             loadProfile(); // оновити тариф одразу
           } else if (status === "cancelled") {
             toast("Оплату скасовано");
@@ -857,6 +939,13 @@
   async function renderPremiumBlock() {
     const root = $("#stats-premium");
     root.innerHTML = "";
+    if (!state.isPremium && !state.premiumViewTracked) {
+      state.premiumViewTracked = true;
+      trackEvent("premium_view", {
+        price_stars: state.premiumPriceStars,
+        placement: "stats",
+      });
+    }
 
     if (!state.isPremium && state.me) {
       root.innerHTML = renderPaywall(state.premiumPriceStars);
@@ -1414,6 +1503,11 @@
 
     // Запуск нового треку
     async play(t) {
+      trackEvent("music_start", {
+        track_kind: t.kind || "unknown",
+        track_scope: t.scope || t._group || "unknown",
+        activity_category: t.category || "other",
+      });
       // цей трек тепер активний
       state.currentTrack = t;
       state.selectedTrack = t; // для зв'язку з таймером
@@ -1891,6 +1985,7 @@
         if (res.ok) {
           toast("⭐ Преміум активовано на " + res.days + " днів!");
           haptic("success");
+          gaEvent("promo_activate", { days: res.days || 0 });
           $("#promo-input").value = "";
           await loadProfile();
         } else {
@@ -2645,6 +2740,7 @@
   }
   function startOnboarding() {
     if (onboardingDone()) return;
+    trackEvent("onboarding_start", { steps: ONBOARD_STEPS.length });
     const overlay = $("#onboard-overlay");
     const tip = $("#onboard-tip");
     if (!overlay || !tip) return;
@@ -2716,6 +2812,7 @@
       overlay.style.clipPath = "";
       tip.classList.add("hidden");
       markOnboardingDone();
+      trackEvent("onboarding_complete", { steps: ONBOARD_STEPS.length });
     }
 
     showStep(0);
@@ -2734,6 +2831,12 @@
     selectMode("focus");
     setFabIcon(false);
     renderTimer();
+    await claimLaunchAttribution();
+    trackEvent("mini_app_open", {
+      telegram_platform: (tg && tg.platform) || "browser",
+      telegram_version: (tg && tg.version) || "unknown",
+      has_start_param: Boolean(state.launchStartParam),
+    });
     await loadProfile();
     // передзавантажуємо список треків, щоб pickDefaultTrack мав дані
     Music.load().catch(() => {});

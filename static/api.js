@@ -1,4 +1,4 @@
-// ===== Focus OS — API-клієнт =====
+// ===== Focus ON — API-клієнт =====
 // Усі запити до бекенду проходять через цей модуль.
 // Авторизація — через initData Telegram WebApp, що додається до кожного запиту.
 
@@ -68,6 +68,12 @@ const API = (() => {
       }),
     finishSession: (payload) =>
       request("POST", "/api/session/finish", { json: payload }),
+
+    // маркетингова атрибуція + власна продуктова аналітика
+    claimAttribution: (start_param) =>
+      request("POST", "/api/attribution/claim", { json: { start_param } }),
+    trackEvent: (event_name, params = {}) =>
+      request("POST", "/api/events", { json: { event_name, params } }),
 
     // музика
     tracks: (category) =>
