@@ -14,7 +14,9 @@
 """
 from __future__ import annotations
 
+import json
 import re
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -232,6 +234,14 @@ def migrate() -> None:
         _add_column(conn, "users", "upload_count", "INTEGER NOT NULL DEFAULT 0")
         # Щоденна ціль фокусу (за замовч. 2 години), для відображення на головному екрані
         _add_column(conn, "users", "daily_goal_seconds", "INTEGER NOT NULL DEFAULT 7200")
+        # Маркетингова атрибуція: перше та останнє джерело користувача.
+        for column in (
+            "first_source", "first_medium", "first_campaign", "first_content",
+            "first_term", "first_gclid", "first_start_param", "first_open_at",
+            "last_source", "last_medium", "last_campaign", "last_content",
+            "last_term", "last_gclid", "last_start_param", "last_open_at",
+        ):
+            _add_column(conn, "users", column, "TEXT NOT NULL DEFAULT ''")
         # PostgreSQL: tg_id INTEGER → BIGINT (Telegram ID > 2.1 млрд)
         if _IS_PG:
             _pg_alter_to_bigint(conn)
@@ -301,6 +311,31 @@ def migrate() -> None:
                 UNIQUE(code, tg_id)
             );
 
+            -- Кліки з лендінгу: повні UTM/gclid зберігаються під коротким токеном,
+            -- який безпечно передається через Telegram /start.
+            CREATE TABLE IF NOT EXISTS attribution_clicks (
+                token         TEXT PRIMARY KEY,
+                source        TEXT NOT NULL DEFAULT '',
+                medium        TEXT NOT NULL DEFAULT '',
+                campaign      TEXT NOT NULL DEFAULT '',
+                content       TEXT NOT NULL DEFAULT '',
+                term          TEXT NOT NULL DEFAULT '',
+                gclid         TEXT NOT NULL DEFAULT '',
+                landing_path  TEXT NOT NULL DEFAULT '/landing',
+                created_at    TEXT NOT NULL,
+                claimed_tg_id BIGINT NOT NULL DEFAULT 0,
+                claimed_at    TEXT NOT NULL DEFAULT ''
+            );
+
+            -- Власна продуктова аналітика. Не містить імені/username/IP.
+            CREATE TABLE IF NOT EXISTS product_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_id        BIGINT NOT NULL,
+                event_name   TEXT NOT NULL,
+                params_json  TEXT NOT NULL DEFAULT '{}',
+                created_at   TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_category ON sessions(category);
             CREATE INDEX IF NOT EXISTS idx_sessions_finished ON sessions(finished_at);
             CREATE INDEX IF NOT EXISTS idx_tracks_category ON tracks(category);
@@ -308,6 +343,11 @@ def migrate() -> None:
             CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);
             CREATE INDEX IF NOT EXISTS idx_plays_tg ON plays(tg_id);
             CREATE INDEX IF NOT EXISTS idx_plays_track ON plays(track_key);
+            CREATE INDEX IF NOT EXISTS idx_attr_clicks_created ON attribution_clicks(created_at);
+            CREATE INDEX IF NOT EXISTS idx_attr_clicks_claimed ON attribution_clicks(claimed_tg_id);
+            CREATE INDEX IF NOT EXISTS idx_product_events_tg ON product_events(tg_id);
+            CREATE INDEX IF NOT EXISTS idx_product_events_name ON product_events(event_name);
+            CREATE INDEX IF NOT EXISTS idx_product_events_created ON product_events(created_at);
             """
         )
 
@@ -457,6 +497,174 @@ def get_user(tg_id: int) -> dict | None:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,)).fetchone()
         return dict(row) if row else None
+
+
+# -------------------------- маркетингова атрибуція ---------------------------
+
+
+def _clean_attr(value: str, max_len: int = 255) -> str:
+    """Нормалізує значення UTM без виконання будь-якого коду."""
+    return str(value or "").strip()[:max_len]
+
+
+def create_attribution_click(data: dict) -> str:
+    """Зберігає повні UTM/gclid і повертає короткий Telegram-safe start token."""
+    now = datetime.now(timezone.utc).isoformat()
+    values = {
+        "source": _clean_attr(data.get("source"), 80),
+        "medium": _clean_attr(data.get("medium"), 80),
+        "campaign": _clean_attr(data.get("campaign"), 160),
+        "content": _clean_attr(data.get("content"), 160),
+        "term": _clean_attr(data.get("term"), 160),
+        "gclid": _clean_attr(data.get("gclid"), 255),
+        "landing_path": _clean_attr(data.get("landing_path") or "/landing", 255),
+    }
+    # c_ + 16 URL-safe символів, значно менше Telegram-ліміту 64.
+    for _ in range(5):
+        token = "c_" + secrets.token_urlsafe(12).replace("-", "").replace("_", "")[:16]
+        try:
+            with get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO attribution_clicks
+                    (token, source, medium, campaign, content, term, gclid, landing_path, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        token, values["source"], values["medium"], values["campaign"],
+                        values["content"], values["term"], values["gclid"],
+                        values["landing_path"], now,
+                    ),
+                )
+            return token
+        except Exception:
+            continue
+    raise RuntimeError("Не вдалося створити attribution token")
+
+
+def _legacy_attribution(start_param: str) -> dict:
+    """Fallback для старих міток виду lp_google_campaign_content."""
+    raw = _clean_attr(start_param, 64)
+    parts = raw.split("_")
+    source = parts[1] if len(parts) > 1 and parts[0] == "lp" else "telegram"
+    campaign = "_".join(parts[2:]) if len(parts) > 2 and parts[0] == "lp" else ""
+    return {
+        "source": source,
+        "medium": "cpc" if source == "google" else "referral",
+        "campaign": campaign,
+        "content": "",
+        "term": "",
+        "gclid": "",
+        "start_param": raw,
+    }
+
+
+def claim_attribution(tg_id: int, start_param: str) -> dict:
+    """Прив'язує рекламний клік до Telegram-користувача.
+
+    Перше джерело записується лише один раз; останнє оновлюється при кожному
+    новому рекламному вході. Функція ідемпотентна для повторних відкриттів.
+    """
+    start_param = _clean_attr(start_param, 64)
+    if not start_param:
+        return {"ok": False, "reason": "empty_start_param"}
+
+    now = datetime.now(timezone.utc).isoformat()
+    attr = None
+    with get_conn() as conn:
+        if start_param.startswith("c_"):
+            row = conn.execute(
+                """
+                SELECT source, medium, campaign, content, term, gclid
+                FROM attribution_clicks WHERE token = ?
+                """,
+                (start_param,),
+            ).fetchone()
+            if row:
+                attr = dict(row)
+                conn.execute(
+                    """
+                    UPDATE attribution_clicks
+                    SET claimed_tg_id = ?, claimed_at = ?
+                    WHERE token = ?
+                    """,
+                    (tg_id, now, start_param),
+                )
+
+        if attr is None:
+            attr = _legacy_attribution(start_param)
+        attr["start_param"] = start_param
+
+        user_row = conn.execute(
+            "SELECT first_start_param FROM users WHERE tg_id = ?", (tg_id,)
+        ).fetchone()
+        is_first = not user_row or not (user_row["first_start_param"] or "")
+
+        if is_first:
+            conn.execute(
+                """
+                UPDATE users SET
+                    first_source = ?, first_medium = ?, first_campaign = ?,
+                    first_content = ?, first_term = ?, first_gclid = ?,
+                    first_start_param = ?, first_open_at = ?
+                WHERE tg_id = ?
+                """,
+                (
+                    attr.get("source", ""), attr.get("medium", ""),
+                    attr.get("campaign", ""), attr.get("content", ""),
+                    attr.get("term", ""), attr.get("gclid", ""),
+                    start_param, now, tg_id,
+                ),
+            )
+
+        conn.execute(
+            """
+            UPDATE users SET
+                last_source = ?, last_medium = ?, last_campaign = ?,
+                last_content = ?, last_term = ?, last_gclid = ?,
+                last_start_param = ?, last_open_at = ?
+            WHERE tg_id = ?
+            """,
+            (
+                attr.get("source", ""), attr.get("medium", ""),
+                attr.get("campaign", ""), attr.get("content", ""),
+                attr.get("term", ""), attr.get("gclid", ""),
+                start_param, now, tg_id,
+            ),
+        )
+
+    return {"ok": True, "first_touch": is_first, **attr}
+
+
+def get_user_attribution(tg_id: int) -> dict:
+    fields = (
+        "first_source, first_medium, first_campaign, first_content, first_term, "
+        "first_start_param, first_open_at, last_source, last_medium, last_campaign, "
+        "last_content, last_term, last_start_param, last_open_at"
+    )
+    with get_conn() as conn:
+        row = conn.execute(f"SELECT {fields} FROM users WHERE tg_id = ?", (tg_id,)).fetchone()
+    return dict(row) if row else {}
+
+
+def record_product_event(tg_id: int, event_name: str, params: dict | None = None) -> int:
+    """Записує продуктову подію без персональних даних."""
+    safe_name = re.sub(r"[^a-z0-9_]", "_", str(event_name or "").lower())[:64]
+    if not safe_name:
+        return 0
+    try:
+        payload = json.dumps(params or {}, ensure_ascii=False, separators=(",", ":"))[:8000]
+    except Exception:
+        payload = "{}"
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO product_events (tg_id, event_name, params_json, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (tg_id, safe_name, payload, datetime.now(timezone.utc).isoformat()),
+        )
+        return _last_id(conn, cur, "product_events")
 
 
 # ------------------------------ тариф ---------------------------------------
@@ -1244,6 +1452,23 @@ def get_admin_stats() -> dict:
             "SELECT COUNT(*) AS c FROM bug_reports"
         ).fetchone()["c"]
 
+        # маркетингова атрибуція та продуктова аналітика
+        users_by_source = conn.execute(
+            """
+            SELECT COALESCE(NULLIF(first_source, ''), 'organic') AS source, COUNT(*) AS c
+            FROM users WHERE tg_id <> 0
+            GROUP BY COALESCE(NULLIF(first_source, ''), 'organic')
+            ORDER BY c DESC
+            """
+        ).fetchall()
+        events_by_name = conn.execute(
+            """
+            SELECT event_name, COUNT(*) AS c
+            FROM product_events
+            GROUP BY event_name ORDER BY c DESC LIMIT 30
+            """
+        ).fetchall()
+
         # прослуховування
         plays_row = conn.execute(
             "SELECT COUNT(*) AS c FROM plays"
@@ -1288,6 +1513,10 @@ def get_admin_stats() -> dict:
             "total": int(plays_row),
             "by_source": [dict(r) for r in plays_by_source],
             "top_tracks": [dict(r) for r in top_tracks],
+        },
+        "marketing": {
+            "users_by_first_source": [dict(r) for r in users_by_source],
+            "events_by_name": [dict(r) for r in events_by_name],
         },
         "categories": CATEGORIES,
         "modes": FOCUS_MODES,

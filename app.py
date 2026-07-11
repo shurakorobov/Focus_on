@@ -325,12 +325,60 @@ class PromoCodeReq(BaseModel):
     max_uses: int = Field(0, ge=0)
 
 
+class AttributionClickReq(BaseModel):
+    source: str = Field("direct", max_length=80)
+    medium: str = Field("none", max_length=80)
+    campaign: str = Field("landing", max_length=160)
+    content: str = Field("", max_length=160)
+    term: str = Field("", max_length=160)
+    gclid: str = Field("", max_length=255)
+    landing_path: str = Field("/landing", max_length=255)
+
+
+class AttributionClaimReq(BaseModel):
+    start_param: str = Field(..., min_length=1, max_length=64)
+
+
+class ProductEventReq(BaseModel):
+    event_name: str = Field(..., min_length=1, max_length=64)
+    params: dict = Field(default_factory=dict)
+
+
 # ------------------------------ API -----------------------------------------
 
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok", "configured": settings.is_configured}
+
+
+@app.post("/api/attribution/click")
+async def api_attribution_click(payload: AttributionClickReq):
+    """Створює короткий токен для переходу landing → Telegram.
+
+    Endpoint публічний: персональних даних не приймає, лише UTM/gclid.
+    """
+    token = db.create_attribution_click(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
+    return {"ok": True, "start_param": token}
+
+
+@app.post("/api/attribution/claim")
+async def api_attribution_claim(
+    payload: AttributionClaimReq, user: dict = Depends(current_user)
+):
+    """Прив'язує рекламну мітку до авторизованого Telegram-користувача."""
+    _ensure_user_exists(user)
+    return db.claim_attribution(user["id"], payload.start_param)
+
+
+@app.post("/api/events")
+async def api_product_event(
+    payload: ProductEventReq, user: dict = Depends(current_user)
+):
+    """Власна продуктова аналітика паралельно з GA4."""
+    _ensure_user_exists(user)
+    event_id = db.record_product_event(user["id"], payload.event_name, payload.params)
+    return {"ok": True, "id": event_id}
 
 
 @app.get("/api/categories")
@@ -382,6 +430,7 @@ async def api_me(request: Request, user: dict = Depends(current_user)):
         "premium_price_stars": settings.PREMIUM_PRICE_STARS,
         "version": settings.APP_VERSION,
         "network": geo,
+        "attribution": db.get_user_attribution(user["id"]),
     }
 
 
@@ -517,6 +566,16 @@ async def api_finish_session(
         completed=payload.completed,
         started_at=payload.started_at,
         category=payload.category,
+    )
+    db.record_product_event(
+        user["id"],
+        "focus_session_complete" if payload.completed else "focus_session_partial",
+        {
+            "mode": payload.mode,
+            "planned_seconds": payload.planned,
+            "actual_seconds": payload.actual,
+            "category": payload.category,
+        },
     )
     stats = db.get_stats(user["id"])
     return {"ok": True, "stats": stats}
@@ -876,6 +935,12 @@ async def _process_stars_payment(sp: dict, chat_id: int) -> None:
     profile_link = f'<a href="tg://user?id={tg_id}">Профіль</a>'
 
     db.record_payment(tg_id, order_id, stars, "success", raw=str(sp))
+    db.record_product_event(tg_id, "purchase", {
+        "transaction_id": order_id,
+        "currency": "XTR",
+        "value": stars,
+        "item_id": "focus_on_premium_month",
+    })
     expires = db.set_user_plan(tg_id, "premium", days=settings.PREMIUM_DURATION_DAYS)
     await _notify_admin(
         f"⭐ <b>Преміум активовано (Stars)</b>\n\n"
@@ -935,6 +1000,10 @@ async def api_redeem(payload: RedeemCode, user: dict = Depends(current_user)):
     """Активує промокод для користувача."""
     _ensure_user_exists(user)
     result = db.redeem_promo_code(user["id"], payload.code)
+    if result.get("ok"):
+        db.record_product_event(user["id"], "promo_activate", {
+            "days": result.get("days", 0),
+        })
     return result
 
 

@@ -732,10 +732,33 @@ details a { color: #d7b2ff; }
     return ['lp', source, campaign, content].filter(Boolean).join('_').slice(0, 64);
   }
 
-  function buildTelegramUrl() {
+  function buildTelegramUrl(startParam) {
     const url = new URL(telegramBaseUrl);
-    url.searchParams.set('start', getStartCode());
+    url.searchParams.set('start', startParam || getStartCode());
     return url.toString();
+  }
+
+  async function createClickToken() {
+    const controller = 'AbortController' in window ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 1800) : null;
+    try {
+      const response = await fetch('/api/attribution/click', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...attribution,
+          landing_path: window.location.pathname
+        }),
+        signal: controller ? controller.signal : undefined
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+      return data.start_param || getStartCode();
+    } catch (_) {
+      return getStartCode();
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   function track(name, payload = {}) {
@@ -749,18 +772,15 @@ details a { color: #d7b2ff; }
     });
   }
 
-  function openTelegram(buttonLocation) {
-    const target = buildTelegramUrl();
+  async function openTelegram(buttonLocation) {
     track('telegram_open_click', {
       button_location: buttonLocation || 'unknown',
-      start_code: getStartCode(),
+      fallback_start_code: getStartCode(),
       transport_type: 'beacon'
     });
 
-    // Невелика затримка дає GA4 час поставити подію в чергу.
-    setTimeout(() => {
-      window.location.href = target;
-    }, 140);
+    const startParam = await createClickToken();
+    window.location.href = buildTelegramUrl(startParam);
   }
 
   document.querySelectorAll('.js-telegram-cta').forEach((button) => {
