@@ -374,9 +374,9 @@ def seed_demo_tracks() -> None:
     from config import settings
     r2 = settings.R2_PUBLIC_URL
     demos = [
-        ("audio", f"{r2}/Demo1.m4a", "Demo 1", "Focus ON", "deep_work"),
-        ("audio", f"{r2}/Demo2.m4a", "Demo 2", "Focus ON", "deep_work"),
-        ("audio", f"{r2}/Demo3.m4a", "Demo 3", "Focus ON", "deep_work"),
+        ("audio", f"{r2}/Demo1.mp3", "Demo 1", "Focus ON", "deep_work"),
+        ("audio", f"{r2}/Demo2.mp3", "Demo 2", "Focus ON", "deep_work"),
+        ("audio", f"{r2}/Demo3.mp3", "Demo 3", "Focus ON", "deep_work"),
     ]
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
@@ -387,18 +387,14 @@ def seed_demo_tracks() -> None:
                 "INSERT INTO users (tg_id, first_name, created_at) VALUES (0, 'Focus ON', ?)",
                 (now,),
             )
-        # ВИДАЛЯЄМО застарілі демо-треки (старі URL: /static/tracks/*, youtube, .mp3 Demo)
-        # Параметризуємо LIKE-патерни: psycopg2 (PG) інакше ламається на літеральному '%'
+        # ВИДАЛЯЄМО застарілі демо-треки: усе що НЕ входить у поточний список
+        # (старі /static/tracks/*, youtube, .m4a, попередні .mp3 релізи тощо).
+        # Підхід NOT IN — безпечніший за LIKE '%.mp3' (не випадково не зачепить поточні).
+        demo_urls = tuple(d[1] for d in demos)
+        placeholders = ",".join(["?"] * len(demo_urls))
         conn.execute(
-            """DELETE FROM tracks WHERE scope = 'demo' AND (
-                url LIKE ? OR url LIKE ? OR url LIKE ? OR url LIKE ?
-            )""",
-            (
-                "/static/tracks/%",
-                "%music.youtube.com%",
-                "%/deep_calm.wav%",
-                "%.mp3",
-            ),
+            f"DELETE FROM tracks WHERE scope = 'demo' AND url NOT IN ({placeholders})",
+            demo_urls,
         )
         # вставляємо нові демо з R2, якщо їх ще немає
         for kind, url, title, author, category in demos:
