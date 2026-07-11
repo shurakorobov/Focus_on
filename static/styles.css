@@ -235,12 +235,11 @@ body {
 .fab svg { fill: currentColor; }
 
 /* ===== Плаваюча кнопка «додати трек» ===== */
-/* fixed → завжди над таббаром. ліва позиція = права межа колонки (240px від
-   центру) мінус відступ 18px, тож кнопка сидить у правому нижньому куті
-   колонки застосунку на будь-якій ширині екрана (десктоп/планшет). */
+/* fixed → завжди над таббаром. На телефоні right:18px прилягає до правого
+   краю екрана; на десктопі медиа-запит фіксує її до правої межі колонки 480px. */
 .add-fab {
   position: fixed;
-  left: calc(50% + 240px - 54px - 18px);
+  right: 18px;
   bottom: calc(var(--tabbar-h) + 18px + env(safe-area-inset-bottom));
   width: 54px; height: 54px;
   border-radius: 50%;
@@ -253,6 +252,10 @@ body {
   z-index: 20;
 }
 .add-fab:active { transform: scale(0.92); }
+/* Десктоп: обмежуємо кнопку до правої межі колонки 480px */
+@media (min-width: 600px) {
+  .add-fab { right: calc(50% - 240px + 18px); }
+}
 
 /* ===== Нижній таб-бар ===== */
 .tabbar {
@@ -1278,9 +1281,9 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 }
 
 /* ===== Дихальна анімація кільця ===== */
-/* Видиме дихання: scale всього кільця + помітне світіння поза ним.
-   Анімуємо .ring (який має власний rotate(-90deg)) — додаємо scale поверх нього,
-   окремо світіння через ring-glow (псевдоелемент timer-wrap). */
+/* Видиме дихання: scale кільця + помітне світіння поза ним.
+   .ring має власний rotate(-90deg) — додаємо scale поверх нього.
+   Світіння через ::before (z-index:0, під .ring та .timer-center). */
 .timer-wrap::before {
   content: "";
   position: absolute;
@@ -1292,7 +1295,8 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   pointer-events: none;
   transition: opacity 0.4s;
 }
-.timer-wrap > * { position: relative; z-index: 1; }
+.timer-wrap .ring { z-index: 1; }
+.timer-wrap .timer-center { z-index: 2; }
 .timer-wrap.running::before { opacity: 0.12; }
 .timer-wrap.running .ring {
   animation: breatheRing 7s ease-in-out infinite;

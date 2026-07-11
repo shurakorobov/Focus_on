@@ -326,6 +326,25 @@ async def api_categories():
     return {"categories": db.CATEGORIES, "modes": db.FOCUS_MODES}
 
 
+@app.get("/api/sounds")
+async def api_sounds():
+    """Перелік ambient-звуків з R2 (URL + метадані).
+    Без авторизації — це публічні лупи."""
+    base = settings.R2_PUBLIC_URL
+    # id має збігатися з SOUND_CHANNELS у app.js
+    sounds = [
+        {"id": "rain", "emoji": "🌧", "name": "Дощ", "url": f"{base}/rain.mp3"},
+        {"id": "cafe", "emoji": "☕", "name": "Кафе", "url": f"{base}/cafe.mp3"},
+        {"id": "fire", "emoji": "🔥", "name": "Вогнище", "url": f"{base}/fire.mp3"},
+        {"id": "ocean", "emoji": "🌊", "name": "Океан", "url": f"{base}/ocean.mp3"},
+        {"id": "forest", "emoji": "🌲", "name": "Ліс", "url": f"{base}/forest.mp3"},
+        {"id": "wind", "emoji": "🌬", "name": "Вітер", "url": f"{base}/wind.mp3"},
+        {"id": "white", "emoji": "🤍", "name": "White noise", "url": f"{base}/white.mp3"},
+        {"id": "brown", "emoji": "🟤", "name": "Brown noise", "url": f"{base}/brown.mp3"},
+    ]
+    return {"sounds": sounds}
+
+
 @app.get("/api/me")
 async def api_me(request: Request, user: dict = Depends(current_user)):
     """Повертає профіль користувача + тариф + мережева інформація."""

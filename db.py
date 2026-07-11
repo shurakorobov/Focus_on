@@ -369,15 +369,14 @@ def init_db() -> None:
 
 def seed_demo_tracks() -> None:
     """Вставляє вбудовані демо-треки (scope='demo'), якщо їх ще немає.
-    Демо-треки тепер живуть у БД — адмін може їх додавати/видаляти."""
+    Демо-треки живуть у БД — адмін може їх додавати/видаляти.
+    Джерело: Cloudflare R2 (R2_PUBLIC_URL)."""
+    from config import settings
+    r2 = settings.R2_PUBLIC_URL
     demos = [
-        ("demo_deep_calm", "audio", "/static/tracks/deep_calm.wav",
-         "Deep Calm", "Focus OS Demo", "other"),
-        ("demo_pulse_focus", "audio", "/static/tracks/pulse_focus.wav",
-         "Pulse Focus", "Focus OS Demo", "other"),
-        ("demo_focus_playlist", "youtube",
-         "https://music.youtube.com/playlist?list=OLAK5uy_ld7f9jlp-xLjPLIt9Q_UtzzFLwKMCETXs",
-         "Робоча збірка", "Netpeak Group", "deep_work"),
+        ("audio", f"{r2}/Demo1.mp3", "Demo 1", "Focus ON", "deep_work"),
+        ("audio", f"{r2}/Demo2.mp3", "Demo 2", "Focus ON", "deep_work"),
+        ("audio", f"{r2}/Demo3.mp3", "Demo 3", "Focus ON", "deep_work"),
     ]
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
@@ -385,11 +384,19 @@ def seed_demo_tracks() -> None:
         exists_user = conn.execute("SELECT 1 FROM users WHERE tg_id = ?", (0,)).fetchone()
         if not exists_user:
             conn.execute(
-                "INSERT INTO users (tg_id, first_name, created_at) VALUES (0, 'Focus OS', ?)",
+                "INSERT INTO users (tg_id, first_name, created_at) VALUES (0, 'Focus ON', ?)",
                 (now,),
             )
-        # вставляємо лише якщо такого demo-треку ще немає (по url)
-        for demo_id, kind, url, title, author, category in demos:
+        # ВИДАЛЯЄМО застарілі демо-треки (старі URL: /static/tracks/*, youtube playlist)
+        conn.execute(
+            """DELETE FROM tracks WHERE scope = 'demo' AND (
+                url LIKE '/static/tracks/%' OR
+                url LIKE '%music.youtube.com%' OR
+                url LIKE '%/Demo1.wav%' OR url LIKE '%/Demo2.wav%'
+            )"""
+        )
+        # вставляємо нові демо з R2, якщо їх ще немає
+        for kind, url, title, author, category in demos:
             exists = conn.execute(
                 "SELECT 1 FROM tracks WHERE scope = 'demo' AND url = ?", (url,)
             ).fetchone()

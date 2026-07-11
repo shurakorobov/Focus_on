@@ -2304,15 +2304,16 @@
   }
 
   // ---------- Звуки (ambient mixer, Web Audio) ----------
+  // Канали: url/emoji/name завантажуються з /api/sounds (R2) у Sounds.init().
   const SOUND_CHANNELS = [
-    { id: "rain", emoji: "🌧", name: "Дощ", type: "rain" },
-    { id: "cafe", emoji: "☕", name: "Кафе", type: "cafe" },
-    { id: "fire", emoji: "🔥", name: "Вогнище", type: "fire" },
-    { id: "ocean", emoji: "🌊", name: "Океан", type: "ocean" },
-    { id: "forest", emoji: "🌲", name: "Ліс", type: "forest" },
-    { id: "white", emoji: "🤍", name: "White noise", type: "white" },
-    { id: "brown", emoji: "🟤", name: "Brown noise", type: "brown" },
-    { id: "wind", emoji: "🌬", name: "Вітер", type: "wind" },
+    { id: "rain", emoji: "🌧", name: "Дощ", url: "" },
+    { id: "cafe", emoji: "☕", name: "Кафе", url: "" },
+    { id: "fire", emoji: "🔥", name: "Вогнище", url: "" },
+    { id: "ocean", emoji: "🌊", name: "Океан", url: "" },
+    { id: "forest", emoji: "🌲", name: "Ліс", url: "" },
+    { id: "wind", emoji: "🌬", name: "Вітер", url: "" },
+    { id: "white", emoji: "🤍", name: "White noise", url: "" },
+    { id: "brown", emoji: "🟤", name: "Brown noise", url: "" },
   ];
 
   // типові пресети (підказки, не зберігаються)
@@ -2323,196 +2324,121 @@
   ];
 
   const Sounds = (() => {
-    let nodes = {}; // id -> { source, gain, filter, lfo? }
+    let nodes = {}; // id -> node handle { stop }
     let active = {}; // id -> volume 0..1
+    let _buffers = {}; // id -> decoded AudioBuffer (cached)
+    let _loading = {}; // id -> Promise (in-flight fetch)
 
-    // --- генерація шумових буферів (якісніший синтез) ---
-    let _noiseCache = {};
-    function noiseBuffer(ctx, type) {
-      if (_noiseCache[type + "_" + ctx.sampleRate]) return _noiseCache[type + "_" + ctx.sampleRate];
-      const len = ctx.sampleRate * 8; // 8 секунд — луп непомітний
-      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-      const data = buf.getChannelData(0);
-
-      if (type === "white") {
-        for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-      } else if (type === "brown") {
-        // brown noise: глибокий інтегратор (екв 1/f²)
-        let last = 0;
-        for (let i = 0; i < len; i++) {
-          const w = Math.random() * 2 - 1;
-          last = (last + 0.02 * w) / 1.02;
-          data[i] = last * 3.5;
-        }
-      } else if (type === "pink") {
-        // рожевий шум: алгоритм Voss-McCartney (екв 1/f)
-        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
-        for (let i = 0; i < len; i++) {
-          const w = Math.random() * 2 - 1;
-          b0 = 0.99886 * b0 + w * 0.0555179;
-          b1 = 0.99332 * b1 + w * 0.0750759;
-          b2 = 0.96900 * b2 + w * 0.1538520;
-          b3 = 0.86650 * b3 + w * 0.3104856;
-          b4 = 0.55000 * b4 + w * 0.5329522;
-          b5 = -0.7616 * b5 - w * 0.0168980;
-          data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.115926) * 0.18;
-          b6 = w * 0.5362;
-        }
-      } else {
-        for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-      }
-      _noiseCache[type + "_" + ctx.sampleRate] = buf;
-      return buf;
+    // --- IndexedDB кеш аудіо-лупів (окрема база від музики) ---
+    const _SOUND_DB = "focus_sounds";
+    const _SOUND_STORE = "loops";
+    let _idb = null;
+    function idbGet(key) {
+      return new Promise((resolve) => {
+        if (!_idb) return resolve(null);
+        const tx = _idb.transaction(_SOUND_STORE, "readonly");
+        const req = tx.objectStore(_SOUND_STORE).get(key);
+        req.onsuccess = () => resolve(req.result ? req.result.data : null);
+        req.onerror = () => resolve(null);
+      });
+    }
+    function idbSet(key, data) {
+      return new Promise((resolve) => {
+        if (!_idb) return resolve();
+        const tx = _idb.transaction(_SOUND_STORE, "readwrite");
+        tx.objectStore(_SOUND_STORE).put({ key, data });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    }
+    function openSoundDB() {
+      return new Promise((resolve) => {
+        try {
+          const req = indexedDB.open(_SOUND_DB, 1);
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(_SOUND_STORE)) {
+              db.createObjectStore(_SOUND_STORE, { keyPath: "key" });
+            }
+          };
+          req.onsuccess = () => { _idb = req.result; resolve(); };
+          req.onerror = () => resolve();
+        } catch (e) { resolve(); }
+      });
     }
 
-    function startChannel(ch) {
+    // --- завантаження лупу: IndexedDB кеш → R2 fetch → decodeAudioData ---
+    async function loadSoundBuffer(ch) {
+      if (_buffers[ch.id]) return _buffers[ch.id];
+      if (_loading[ch.id]) return _loading[ch.id];
+      _loading[ch.id] = (async () => {
+        const ctx = audioCtx();
+        if (!ctx || !ch.url) return null;
+        try {
+          // 1) IndexedDB кеш
+          const cached = await idbGet(ch.url);
+          let arrBuf;
+          if (cached) {
+            arrBuf = cached;
+          } else {
+            // 2) fetch з R2
+            const resp = await fetch(ch.url);
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            arrBuf = await resp.arrayBuffer();
+            // зберігаємо в кеш (не чекаємо)
+            idbSet(ch.url, arrBuf).catch(() => {});
+          }
+          // 3) декодуємо MP3 → AudioBuffer
+          const buf = await ctx.decodeAudioData(arrBuf.slice(0));
+          _buffers[ch.id] = buf;
+          return buf;
+        } catch (e) {
+          console.warn("Звук не завантажений:", ch.id, e.message);
+          return null;
+        } finally {
+          delete _loading[ch.id];
+        }
+      })();
+      return _loading[ch.id];
+    }
+
+    async function startChannel(ch) {
       const ctx = audioCtx();
       if (!ctx) return;
       if (ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
-      const t = ch.type;
-      const created = []; // усі джерела/осцилятори для зупинки
 
-      // === головний gain-міксер каналу ===
-      const masterGain = ctx.createGain();
-      masterGain.gain.value = 0;
-      masterGain.connect(ctx.destination);
-      created.push({ stop: () => masterGain.disconnect() });
+      // позначаємо як «завантажується» поки тягнемо буфер
+      nodes[ch.id] = { loading: true, stop() {} };
+      render(); // показати спінер на картці
 
-      // базовий шумовий шар (постійний)
-      const noiseType = (t === "cafe" || t === "forest") ? "pink"
-        : (t === "white") ? "white"
-        : (t === "rain") ? "white"      // дощ будуємо з високочастотного шуму
-        : "brown";
+      const buf = await loadSoundBuffer(ch);
+      if (!buf) {
+        delete nodes[ch.id];
+        toast("Не вдалось завантажити «" + ch.name + "»");
+        render();
+        return;
+      }
+      // якщо юзер вже вимкнув канал поки завантажувалось — не запускаємо
+      if (!active[ch.id]) { delete nodes[ch.id]; render(); return; }
+
       const src = ctx.createBufferSource();
-      src.buffer = noiseBuffer(ctx, noiseType);
+      src.buffer = buf;
       src.loop = true;
-      created.push(src);
-
-      // багатошарові фільтри для природного звучання
-      const filter = ctx.createBiquadFilter();
-      const filter2 = ctx.createBiquadFilter(); // другий каскад
-
-      if (t === "rain") {
-        // дощ: високочастотне шипіння + легкий низ
-        filter.type = "highpass"; filter.frequency.value = 600; filter.Q.value = 0.7;
-        filter2.type = "peaking"; filter2.frequency.value = 2500; filter2.gain.value = 4; filter2.Q.value = 1;
-      } else if (t === "cafe") {
-        // кафе: теплий гул + легка високочастотна присутність
-        filter.type = "lowpass"; filter.frequency.value = 1200;
-        filter2.type = "peaking"; filter2.frequency.value = 500; filter2.gain.value = 3; filter2.Q.value = 1.5;
-      } else if (t === "fire") {
-        // вогонь: низький гул (окремий шар тріску нижче)
-        filter.type = "lowpass"; filter.frequency.value = 600;
-        filter2.type = "lowpass"; filter2.frequency.value = 800;
-      } else if (t === "ocean") {
-        // океан: широкий низ з модуляцією (хвилі)
-        filter.type = "lowpass"; filter.frequency.value = 500;
-        filter2.type = "peaking"; filter2.frequency.value = 200; filter2.gain.value = 6; filter2.Q.value = 0.8;
-      } else if (t === "forest") {
-        // ліс: повітряний високочастотний шар (птахи — окремо)
-        filter.type = "highpass"; filter.frequency.value = 800;
-        filter2.type = "lowpass"; filter2.frequency.value = 3000;
-      } else if (t === "wind") {
-        // вітер: середньочастотний з LFO (пориви)
-        filter.type = "bandpass"; filter.frequency.value = 500; filter.Q.value = 0.6;
-        filter2.type = "lowpass"; filter2.frequency.value = 1500;
-      } else if (t === "white") {
-        filter.type = "allpass";
-        filter2.type = "allpass";
-      } else if (t === "brown") {
-        filter.type = "lowpass"; filter.frequency.value = 500;
-        filter2.type = "lowpass"; filter2.frequency.value = 300;
-      }
-
-      src.connect(filter).connect(filter2).connect(masterGain);
-
-      // === LFO-модуляція для динамічних звуків ===
-      let lfo = null, lfoGain = null;
-      if (t === "ocean" || t === "wind") {
-        lfo = ctx.createOscillator();
-        lfoGain = ctx.createGain();
-        lfo.frequency.value = t === "ocean" ? 0.1 : 0.15;
-        lfoGain.gain.value = t === "ocean" ? 0.35 : 0.25;
-        // модуляція gain-міксера для ефекту хвиль/поривів
-        lfo.connect(lfoGain).connect(masterGain.gain);
-        lfo.start();
-        created.push(lfo);
-      }
-
-      // === дискретні події (тріск вогню, краплі дощу, птахи) ===
-      let eventTimer = null;
-      if (t === "fire") {
-        // тріск: короткі низькочастотні «пуки» кожні 200-800мс
-        const crackle = () => {
-          if (!nodes[ch.id]) return;
-          const burst = ctx.createBufferSource();
-          burst.buffer = noiseBuffer(ctx, "brown");
-          const bf = ctx.createBiquadFilter();
-          bf.type = "bandpass"; bf.frequency.value = 200 + Math.random() * 600; bf.Q.value = 2;
-          const bg = ctx.createGain();
-          const now = ctx.currentTime;
-          bg.gain.setValueAtTime(0, now);
-          bg.gain.linearRampToValueAtTime(0.3 + Math.random() * 0.3, now + 0.005);
-          bg.gain.exponentialRampToValueAtTime(0.001, now + 0.04 + Math.random() * 0.06);
-          burst.connect(bf).connect(bg).connect(masterGain);
-          burst.start(now);
-          burst.stop(now + 0.15);
-          eventTimer = setTimeout(crackle, 150 + Math.random() * 700);
-        };
-        eventTimer = setTimeout(crackle, 300);
-      } else if (t === "forest") {
-        // пташки: короткі високочастотні «чіпи»
-        const chirp = () => {
-          if (!nodes[ch.id]) return;
-          const osc = ctx.createOscillator();
-          osc.type = "sine";
-          const base = 2500 + Math.random() * 2500;
-          const now = ctx.currentTime;
-          osc.frequency.setValueAtTime(base, now);
-          osc.frequency.linearRampToValueAtTime(base + (Math.random() - 0.5) * 800, now + 0.06);
-          const g = ctx.createGain();
-          g.gain.setValueAtTime(0, now);
-          g.gain.linearRampToValueAtTime(0.04 + Math.random() * 0.04, now + 0.01);
-          g.gain.exponentialRampToValueAtTime(0.001, now + 0.08 + Math.random() * 0.08);
-          osc.connect(g).connect(masterGain);
-          osc.start(now);
-          osc.stop(now + 0.2);
-          eventTimer = setTimeout(chirp, 800 + Math.random() * 4000);
-        };
-        eventTimer = setTimeout(chirp, 1000);
-      } else if (t === "rain") {
-        // окремі краплі: дуже тихі високочастотні «тіки»
-        const drip = () => {
-          if (!nodes[ch.id]) return;
-          const burst = ctx.createBufferSource();
-          burst.buffer = noiseBuffer(ctx, "white");
-          const bf = ctx.createBiquadFilter();
-          bf.type = "highpass"; bf.frequency.value = 3000;
-          const bg = ctx.createGain();
-          const now = ctx.currentTime;
-          bg.gain.setValueAtTime(0, now);
-          bg.gain.linearRampToValueAtTime(0.06 + Math.random() * 0.06, now + 0.002);
-          bg.gain.exponentialRampToValueAtTime(0.001, now + 0.02);
-          burst.connect(bf).connect(bg).connect(masterGain);
-          burst.start(now);
-          burst.stop(now + 0.05);
-          eventTimer = setTimeout(drip, 40 + Math.random() * 120);
-        };
-        eventTimer = setTimeout(drip, 200);
-      }
-
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      src.connect(gain).connect(ctx.destination);
       src.start();
       // плавний вхід
-      masterGain.gain.setTargetAtTime(active[ch.id] || 0.5, ctx.currentTime, 0.4);
+      gain.gain.setTargetAtTime(active[ch.id] || 0.6, ctx.currentTime, 0.4);
 
       nodes[ch.id] = {
-        source: src, gain: masterGain, filter, lfo,
+        source: src, gain,
         stop() {
-          if (eventTimer) clearTimeout(eventTimer);
-          try { const c = audioCtx(); masterGain.gain.setTargetAtTime(0, c.currentTime, 0.2); } catch (e) {}
-          setTimeout(() => { created.forEach((n) => { try { if (n.stop) n.stop(); } catch (e) {} try { if (n.disconnect) n.disconnect(); } catch (e) {} }); }, 300);
+          try { const c = audioCtx(); gain.gain.setTargetAtTime(0, c.currentTime, 0.2); } catch (e) {}
+          setTimeout(() => { try { src.stop(); } catch (e) {} try { src.disconnect(); gain.disconnect(); } catch (e) {} }, 300);
         },
       };
+      render();
     }
 
     function stopChannel(id) {
@@ -2526,34 +2452,37 @@
       active[id] = vol;
       const n = nodes[id];
       const ctx = audioCtx();
-      if (n && ctx) n.gain.gain.setTargetAtTime(vol, ctx.currentTime, 0.1);
+      if (n && n.gain && ctx) n.gain.gain.setTargetAtTime(vol, ctx.currentTime, 0.1);
     }
 
-    function toggle(ch) {
+    async function toggle(ch) {
       const ctx = audioCtx();
       if (ctx && ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
       if (active[ch.id]) {
         stopChannel(ch.id);
         delete active[ch.id];
+        saveMix();
+        render();
       } else {
         active[ch.id] = 0.6;
-        startChannel(ch);
+        saveMix();
+        render(); // миттєво показати active стан
+        await startChannel(ch);
       }
-      saveMix();
-      render(); // оновити UI
     }
 
-    function applyMix(mix) {
-      // зупинити все, потім увімкнути з міксу
+    async function applyMix(mix) {
       Object.keys(nodes).forEach(stopChannel);
       active = {};
       const ctx = audioCtx();
       if (ctx && ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
+      // вмикаємо всі з міксу
       Object.keys(mix).forEach((id) => {
         const ch = SOUND_CHANNELS.find((c) => c.id === id);
-        if (!ch) return;
-        active[id] = mix[id];
-        startChannel(ch);
+        if (ch) {
+          active[id] = mix[id];
+          startChannel(ch);
+        }
       });
       saveMix();
       render();
@@ -2576,24 +2505,24 @@
       if (!grid) return;
       grid.innerHTML = SOUND_CHANNELS.map((ch) => {
         const on = !!active[ch.id];
+        const isLoading = nodes[ch.id] && nodes[ch.id].loading;
         const vol = active[ch.id] != null ? Math.round(active[ch.id] * 100) : 60;
+        const emoji = isLoading ? '<span class="sound-spin">⏳</span>' : ch.emoji;
         return '<div class="sound-card' + (on ? " active" : "") + '" data-id="' + ch.id + '">' +
-          '<div class="sound-emoji">' + ch.emoji + '</div>' +
+          '<div class="sound-emoji">' + emoji + '</div>' +
           '<div class="sound-name">' + ch.name + '</div>' +
           '<input type="range" class="sound-volume" min="0" max="100" value="' + vol + '" data-id="' + ch.id + '" />' +
           '</div>';
       }).join("");
 
-      // тап по картці = вкл/викл
       grid.querySelectorAll(".sound-card").forEach((card) => {
         card.addEventListener("click", (e) => {
-          if (e.target.classList.contains("sound-volume")) return; // слайдер окремо
+          if (e.target.classList.contains("sound-volume")) return;
           const id = card.dataset.id;
           const ch = SOUND_CHANNELS.find((c) => c.id === id);
           if (ch) { toggle(ch); haptic("light"); }
         });
       });
-      // слайдер гучності
       grid.querySelectorAll(".sound-volume").forEach((slider) => {
         slider.addEventListener("input", (e) => {
           e.stopPropagation();
@@ -2645,10 +2574,25 @@
       });
     }
 
+    let _urlsLoaded = false;
+    async function loadUrls() {
+      if (_urlsLoaded) return;
+      try {
+        const r = await fetch("/api/sounds");
+        const d = await r.json();
+        (d.sounds || []).forEach((s) => {
+          const ch = SOUND_CHANNELS.find((c) => c.id === s.id);
+          if (ch) { ch.url = s.url; if (s.emoji) ch.emoji = s.emoji; if (s.name) ch.name = s.name; }
+        });
+        _urlsLoaded = true;
+      } catch (e) {}
+    }
+
     return {
-      init() {
+      async init() {
         loadMix();
-        // кнопка «зберегти мікс»
+        await openSoundDB();
+        await loadUrls();
         const saveBtn = $("#btn-save-preset");
         if (saveBtn) saveBtn.addEventListener("click", () => {
           const name = ($("#preset-name-input").value || "").trim();
@@ -2664,13 +2608,12 @@
       },
       render,
       resume() {
-        // WebKit зупиняє AudioContext при згортанні — відновлюємо активні канали
         const ctx = audioCtx();
         if (!ctx) return;
         if (ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
-        // перезапускаємо зупинені джерела
+        // перезапускаємо зупинені WebKit'ом лупи
         Object.keys(active).forEach((id) => {
-          if (!nodes[id]) {
+          if (!nodes[id] || !nodes[id].source) {
             const ch = SOUND_CHANNELS.find((c) => c.id === id);
             if (ch) startChannel(ch);
           }

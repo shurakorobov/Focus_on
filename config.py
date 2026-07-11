@@ -39,6 +39,12 @@ class Settings:
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     SUPABASE_BUCKET: str = os.getenv("SUPABASE_BUCKET", "tracks")
 
+    # Cloudflare R2 — публічне сховище для ambient-звуків та демо-треків.
+    # URL бакета з увімкненим публічним доступом (r2.dev або кастомний домен).
+    R2_PUBLIC_URL: str = os.getenv(
+        "R2_PUBLIC_URL", "https://pub-a1d59554b57543038a1128541bbdb32e.r2.dev"
+    ).strip().rstrip("/")
+
     # Telegram Stars — нативна валюта Telegram для платежів.
     # PREMIUM_PRICE_STARS — ціна місячної підписки в Stars (1 Star ≈ $0.013).
     PREMIUM_PRICE_STARS: int = int(os.getenv("PREMIUM_PRICE_STARS", "100"))
