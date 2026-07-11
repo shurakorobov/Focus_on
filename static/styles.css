@@ -1278,16 +1278,39 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 }
 
 /* ===== Дихальна анімація кільця ===== */
-.timer-wrap.running .ring-fg {
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--mode-color) 50%, transparent));
-  animation: breathe 8s ease-in-out infinite;
+/* Видиме дихання: scale всього кільця + помітне світіння поза ним.
+   Анімуємо .ring (який має власний rotate(-90deg)) — додаємо scale поверх нього,
+   окремо світіння через ring-glow (псевдоелемент timer-wrap). */
+.timer-wrap::before {
+  content: "";
+  position: absolute;
+  width: min(70vw, 255px); height: min(70vw, 255px);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--mode-color) 0%, transparent 70%);
+  opacity: 0;
+  z-index: 0;
+  pointer-events: none;
+  transition: opacity 0.4s;
 }
-@keyframes breathe {
-  0%, 100% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--mode-color) 30%, transparent)); }
-  50% { filter: drop-shadow(0 0 16px color-mix(in srgb, var(--mode-color) 60%, transparent)); }
+.timer-wrap > * { position: relative; z-index: 1; }
+.timer-wrap.running::before { opacity: 0.12; }
+.timer-wrap.running .ring {
+  animation: breatheRing 7s ease-in-out infinite;
+}
+.timer-wrap.running::before {
+  animation: breatheGlow 7s ease-in-out infinite;
+}
+@keyframes breatheRing {
+  0%, 100% { transform: rotate(-90deg) scale(1); }
+  50%      { transform: rotate(-90deg) scale(1.03); }
+}
+@keyframes breatheGlow {
+  0%, 100% { opacity: 0.10; transform: scale(0.96); }
+  50%      { opacity: 0.24; transform: scale(1.06); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .timer-wrap.running .ring-fg { animation: none; }
+  .timer-wrap.running .ring,
+  .timer-wrap.running::before { animation: none; }
   .sound-card.active .sound-emoji { animation: none; }
 }
 

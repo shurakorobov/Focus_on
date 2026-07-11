@@ -2326,29 +2326,42 @@
     let nodes = {}; // id -> { source, gain, filter, lfo? }
     let active = {}; // id -> volume 0..1
 
-    // --- генерація шумових буферів ---
+    // --- генерація шумових буферів (якісніший синтез) ---
     let _noiseCache = {};
     function noiseBuffer(ctx, type) {
-      if (_noiseCache[type]) return _noiseCache[type];
-      const len = ctx.sampleRate * 2; // 2 секунди луп
+      if (_noiseCache[type + "_" + ctx.sampleRate]) return _noiseCache[type + "_" + ctx.sampleRate];
+      const len = ctx.sampleRate * 8; // 8 секунд — луп непомітний
       const buf = ctx.createBuffer(1, len, ctx.sampleRate);
       const data = buf.getChannelData(0);
+
       if (type === "white") {
         for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-      } else if (type === "brown" || type === "pink" || type === "rain") {
-        // brown/pink: інтегратор для м'якшого низу
+      } else if (type === "brown") {
+        // brown noise: глибокий інтегратор (екв 1/f²)
         let last = 0;
-        const alpha = type === "brown" ? 0.02 : 0.05;
         for (let i = 0; i < len; i++) {
-          const white = Math.random() * 2 - 1;
-          last = (last + alpha * white) / (1 + alpha);
+          const w = Math.random() * 2 - 1;
+          last = (last + 0.02 * w) / 1.02;
           data[i] = last * 3.5;
         }
+      } else if (type === "pink") {
+        // рожевий шум: алгоритм Voss-McCartney (екв 1/f)
+        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+        for (let i = 0; i < len; i++) {
+          const w = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + w * 0.0555179;
+          b1 = 0.99332 * b1 + w * 0.0750759;
+          b2 = 0.96900 * b2 + w * 0.1538520;
+          b3 = 0.86650 * b3 + w * 0.3104856;
+          b4 = 0.55000 * b4 + w * 0.5329522;
+          b5 = -0.7616 * b5 - w * 0.0168980;
+          data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.115926) * 0.18;
+          b6 = w * 0.5362;
+        }
       } else {
-        // за замовч. білий
         for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
       }
-      _noiseCache[type] = buf;
+      _noiseCache[type + "_" + ctx.sampleRate] = buf;
       return buf;
     }
 
@@ -2356,60 +2369,156 @@
       const ctx = audioCtx();
       if (!ctx) return;
       if (ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
-
       const t = ch.type;
-      const src = ctx.createBufferSource();
-      // базовий шум для типу
+      const created = []; // усі джерела/осцилятори для зупинки
+
+      // === головний gain-міксер каналу ===
+      const masterGain = ctx.createGain();
+      masterGain.gain.value = 0;
+      masterGain.connect(ctx.destination);
+      created.push({ stop: () => masterGain.disconnect() });
+
+      // базовий шумовий шар (постійний)
       const noiseType = (t === "cafe" || t === "forest") ? "pink"
         : (t === "white") ? "white"
+        : (t === "rain") ? "white"      // дощ будуємо з високочастотного шуму
         : "brown";
+      const src = ctx.createBufferSource();
       src.buffer = noiseBuffer(ctx, noiseType);
       src.loop = true;
+      created.push(src);
 
+      // багатошарові фільтри для природного звучання
       const filter = ctx.createBiquadFilter();
-      const gain = ctx.createGain();
-      gain.gain.value = 0;
+      const filter2 = ctx.createBiquadFilter(); // другий каскад
 
-      // характер звуку через фільтр
-      if (t === "rain") { filter.type = "bandpass"; filter.frequency.value = 1200; filter.Q.value = 0.6; }
-      else if (t === "cafe") { filter.type = "lowpass"; filter.frequency.value = 800; }
-      else if (t === "fire") { filter.type = "lowpass"; filter.frequency.value = 500; }
-      else if (t === "ocean") { filter.type = "lowpass"; filter.frequency.value = 600; }
-      else if (t === "forest") { filter.type = "highpass"; filter.frequency.value = 1000; }
-      else if (t === "wind") { filter.type = "bandpass"; filter.frequency.value = 400; filter.Q.value = 0.4; }
-      else if (t === "white") { filter.type = "allpass"; }
-      else if (t === "brown") { filter.type = "lowpass"; filter.frequency.value = 400; }
+      if (t === "rain") {
+        // дощ: високочастотне шипіння + легкий низ
+        filter.type = "highpass"; filter.frequency.value = 600; filter.Q.value = 0.7;
+        filter2.type = "peaking"; filter2.frequency.value = 2500; filter2.gain.value = 4; filter2.Q.value = 1;
+      } else if (t === "cafe") {
+        // кафе: теплий гул + легка високочастотна присутність
+        filter.type = "lowpass"; filter.frequency.value = 1200;
+        filter2.type = "peaking"; filter2.frequency.value = 500; filter2.gain.value = 3; filter2.Q.value = 1.5;
+      } else if (t === "fire") {
+        // вогонь: низький гул (окремий шар тріску нижче)
+        filter.type = "lowpass"; filter.frequency.value = 600;
+        filter2.type = "lowpass"; filter2.frequency.value = 800;
+      } else if (t === "ocean") {
+        // океан: широкий низ з модуляцією (хвилі)
+        filter.type = "lowpass"; filter.frequency.value = 500;
+        filter2.type = "peaking"; filter2.frequency.value = 200; filter2.gain.value = 6; filter2.Q.value = 0.8;
+      } else if (t === "forest") {
+        // ліс: повітряний високочастотний шар (птахи — окремо)
+        filter.type = "highpass"; filter.frequency.value = 800;
+        filter2.type = "lowpass"; filter2.frequency.value = 3000;
+      } else if (t === "wind") {
+        // вітер: середньочастотний з LFO (пориви)
+        filter.type = "bandpass"; filter.frequency.value = 500; filter.Q.value = 0.6;
+        filter2.type = "lowpass"; filter2.frequency.value = 1500;
+      } else if (t === "white") {
+        filter.type = "allpass";
+        filter2.type = "allpass";
+      } else if (t === "brown") {
+        filter.type = "lowpass"; filter.frequency.value = 500;
+        filter2.type = "lowpass"; filter2.frequency.value = 300;
+      }
 
-      src.connect(filter).connect(gain).connect(ctx.destination);
+      src.connect(filter).connect(filter2).connect(masterGain);
 
-      // LFO для ocean/wind (хвилі/пориви)
+      // === LFO-модуляція для динамічних звуків ===
       let lfo = null, lfoGain = null;
       if (t === "ocean" || t === "wind") {
         lfo = ctx.createOscillator();
         lfoGain = ctx.createGain();
-        lfo.frequency.value = t === "ocean" ? 0.12 : 0.2;
-        lfoGain.gain.value = 0.04;
-        lfo.connect(lfoGain).connect(gain.gain);
+        lfo.frequency.value = t === "ocean" ? 0.1 : 0.15;
+        lfoGain.gain.value = t === "ocean" ? 0.35 : 0.25;
+        // модуляція gain-міксера для ефекту хвиль/поривів
+        lfo.connect(lfoGain).connect(masterGain.gain);
         lfo.start();
+        created.push(lfo);
+      }
+
+      // === дискретні події (тріск вогню, краплі дощу, птахи) ===
+      let eventTimer = null;
+      if (t === "fire") {
+        // тріск: короткі низькочастотні «пуки» кожні 200-800мс
+        const crackle = () => {
+          if (!nodes[ch.id]) return;
+          const burst = ctx.createBufferSource();
+          burst.buffer = noiseBuffer(ctx, "brown");
+          const bf = ctx.createBiquadFilter();
+          bf.type = "bandpass"; bf.frequency.value = 200 + Math.random() * 600; bf.Q.value = 2;
+          const bg = ctx.createGain();
+          const now = ctx.currentTime;
+          bg.gain.setValueAtTime(0, now);
+          bg.gain.linearRampToValueAtTime(0.3 + Math.random() * 0.3, now + 0.005);
+          bg.gain.exponentialRampToValueAtTime(0.001, now + 0.04 + Math.random() * 0.06);
+          burst.connect(bf).connect(bg).connect(masterGain);
+          burst.start(now);
+          burst.stop(now + 0.15);
+          eventTimer = setTimeout(crackle, 150 + Math.random() * 700);
+        };
+        eventTimer = setTimeout(crackle, 300);
+      } else if (t === "forest") {
+        // пташки: короткі високочастотні «чіпи»
+        const chirp = () => {
+          if (!nodes[ch.id]) return;
+          const osc = ctx.createOscillator();
+          osc.type = "sine";
+          const base = 2500 + Math.random() * 2500;
+          const now = ctx.currentTime;
+          osc.frequency.setValueAtTime(base, now);
+          osc.frequency.linearRampToValueAtTime(base + (Math.random() - 0.5) * 800, now + 0.06);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0, now);
+          g.gain.linearRampToValueAtTime(0.04 + Math.random() * 0.04, now + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.001, now + 0.08 + Math.random() * 0.08);
+          osc.connect(g).connect(masterGain);
+          osc.start(now);
+          osc.stop(now + 0.2);
+          eventTimer = setTimeout(chirp, 800 + Math.random() * 4000);
+        };
+        eventTimer = setTimeout(chirp, 1000);
+      } else if (t === "rain") {
+        // окремі краплі: дуже тихі високочастотні «тіки»
+        const drip = () => {
+          if (!nodes[ch.id]) return;
+          const burst = ctx.createBufferSource();
+          burst.buffer = noiseBuffer(ctx, "white");
+          const bf = ctx.createBiquadFilter();
+          bf.type = "highpass"; bf.frequency.value = 3000;
+          const bg = ctx.createGain();
+          const now = ctx.currentTime;
+          bg.gain.setValueAtTime(0, now);
+          bg.gain.linearRampToValueAtTime(0.06 + Math.random() * 0.06, now + 0.002);
+          bg.gain.exponentialRampToValueAtTime(0.001, now + 0.02);
+          burst.connect(bf).connect(bg).connect(masterGain);
+          burst.start(now);
+          burst.stop(now + 0.05);
+          eventTimer = setTimeout(drip, 40 + Math.random() * 120);
+        };
+        eventTimer = setTimeout(drip, 200);
       }
 
       src.start();
-      gain.gain.setTargetAtTime(active[ch.id] || 0.5, ctx.currentTime, 0.3);
+      // плавний вхід
+      masterGain.gain.setTargetAtTime(active[ch.id] || 0.5, ctx.currentTime, 0.4);
 
-      nodes[ch.id] = { source: src, gain, filter, lfo, lfoGain };
+      nodes[ch.id] = {
+        source: src, gain: masterGain, filter, lfo,
+        stop() {
+          if (eventTimer) clearTimeout(eventTimer);
+          try { const c = audioCtx(); masterGain.gain.setTargetAtTime(0, c.currentTime, 0.2); } catch (e) {}
+          setTimeout(() => { created.forEach((n) => { try { if (n.stop) n.stop(); } catch (e) {} try { if (n.disconnect) n.disconnect(); } catch (e) {} }); }, 300);
+        },
+      };
     }
 
     function stopChannel(id) {
       const n = nodes[id];
       if (!n) return;
-      try {
-        const ctx = audioCtx();
-        if (ctx) n.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.15);
-        setTimeout(() => {
-          try { n.source.stop(); } catch (e) {}
-          try { if (n.lfo) n.lfo.stop(); } catch (e) {}
-        }, 250);
-      } catch (e) {}
+      try { n.stop(); } catch (e) {}
       delete nodes[id];
     }
 
