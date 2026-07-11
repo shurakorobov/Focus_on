@@ -388,12 +388,17 @@ def seed_demo_tracks() -> None:
                 (now,),
             )
         # ВИДАЛЯЄМО застарілі демо-треки (старі URL: /static/tracks/*, youtube playlist)
+        # Параметризуємо LIKE-патерни: psycopg2 (PG) інакше ламається на літеральному '%'
         conn.execute(
             """DELETE FROM tracks WHERE scope = 'demo' AND (
-                url LIKE '/static/tracks/%' OR
-                url LIKE '%music.youtube.com%' OR
-                url LIKE '%/Demo1.wav%' OR url LIKE '%/Demo2.wav%'
-            )"""
+                url LIKE ? OR url LIKE ? OR url LIKE ? OR url LIKE ?
+            )""",
+            (
+                "/static/tracks/%",
+                "%music.youtube.com%",
+                "%/deep_calm.wav%",
+                "%/pulse_focus.wav%",
+            ),
         )
         # вставляємо нові демо з R2, якщо їх ще немає
         for kind, url, title, author, category in demos:
