@@ -374,9 +374,9 @@ def seed_demo_tracks() -> None:
     from config import settings
     r2 = settings.R2_PUBLIC_URL
     demos = [
-        ("audio", f"{r2}/Demo1.mp3", "Demo 1", "Focus ON", "deep_work"),
-        ("audio", f"{r2}/Demo2.mp3", "Demo 2", "Focus ON", "deep_work"),
-        ("audio", f"{r2}/Demo3.mp3", "Demo 3", "Focus ON", "deep_work"),
+        ("audio", f"{r2}/Demo1.m4a", "Demo 1", "Focus ON", "deep_work"),
+        ("audio", f"{r2}/Demo2.m4a", "Demo 2", "Focus ON", "deep_work"),
+        ("audio", f"{r2}/Demo3.m4a", "Demo 3", "Focus ON", "deep_work"),
     ]
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
@@ -387,17 +387,19 @@ def seed_demo_tracks() -> None:
                 "INSERT INTO users (tg_id, first_name, created_at) VALUES (0, 'Focus ON', ?)",
                 (now,),
             )
-        # ВИДАЛЯЄМО застарілі демо-треки (старі URL: /static/tracks/*, youtube playlist)
+        # ВИДАЛЯЄМО застарілі демо-треки (старі URL: /static/tracks/*, youtube, .mp3 Demo)
         # Параметризуємо LIKE-патерни: psycopg2 (PG) інакше ламається на літеральному '%'
         conn.execute(
             """DELETE FROM tracks WHERE scope = 'demo' AND (
-                url LIKE ? OR url LIKE ? OR url LIKE ? OR url LIKE ?
+                url LIKE ? OR url LIKE ? OR url LIKE ? OR url LIKE ? OR url LIKE ? OR url LIKE ?
             )""",
             (
                 "/static/tracks/%",
                 "%music.youtube.com%",
                 "%/deep_calm.wav%",
                 "%/pulse_focus.wav%",
+                "%/Demo1.mp3",
+                "%/Demo2.mp3",
             ),
         )
         # вставляємо нові демо з R2, якщо їх ще немає
