@@ -1454,11 +1454,19 @@
       if (artEl) artEl.classList.add("loading");
 
       try {
-        const resolved = await AudioCache.resolveUrl(cacheKey, t.url, (p) => {
-          if (artEl) artEl.style.setProperty("--dl", Math.round(p * 100) + "%");
-        });
-        audio.src = resolved.url;
-        audio.setAttribute("data-cached", resolved.cached ? "1" : "0");
+        // швидкий старт: якщо є в кеші → blob:URL; якщо ні — стрім напряму з R2
+        // (Range support дозволяє миттєвий старт без повного завантаження),
+        // а кешування треку йде паралельно у фоні.
+        const cached = await AudioCache.get(cacheKey);
+        if (cached) {
+          audio.src = URL.createObjectURL(cached);
+          audio.setAttribute("data-cached", "1");
+        } else {
+          audio.src = t.url; // стрім з R2 — миттєвий старт
+          audio.setAttribute("data-cached", "0");
+          // паралельно кешуємо у фоні (для наступних play + фонового відтворення)
+          AudioCache.fetchAndStore(cacheKey, t.url).catch(() => {});
+        }
         await audio.play();
         this._setupMediaSession(t);
       } catch (e) {
@@ -2729,8 +2737,29 @@
     await loadProfile();
     // передзавантажуємо список треків, щоб pickDefaultTrack мав дані
     Music.load().catch(() => {});
+    // фонова передачація демо-треків у IndexedDB (щоб не чекати при першому play)
+    preloadDemos();
     // онбординг для новачків (після завантаження профілю)
     setTimeout(startOnboarding, 600);
+  }
+
+  // ---------- Передзавантаження демо-треків у кеш ----------
+  // Завантажує Demo 1/2/3 з R2 у IndexedDB у фоні при відкритті застосунку,
+  // щоб перший play стартував миттєво (з локального blob:).
+  async function preloadDemos() {
+    try {
+      const tracks = await API.tracks("deep_work");
+      const demos = (tracks.tracks || []).filter((t) => t.scope === "demo" && t.kind === "audio");
+      // завантажуємо послідовно (паралельно 3×100MB може перевантажити мобільний інтернет)
+      for (const t of demos) {
+        const key = t.track_key || ("db:" + t.id) || t.url;
+        const already = await AudioCache.has(key);
+        if (already) continue; // вже в кеші — пропускаємо
+        await AudioCache.fetchAndStore(key, t.url).catch(() => {});
+      }
+    } catch (e) {
+      // тихо — це оптимізація, не критично
+    }
   }
 
   // ---------- Heartbeat: позначає користувача онлайн ----------
