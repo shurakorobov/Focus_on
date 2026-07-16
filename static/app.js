@@ -342,6 +342,7 @@
     if (state.tickerId) { clearInterval(state.tickerId); state.tickerId = null; }
     state.running = false;
     state.remaining = state.totalSeconds;
+    state.startedAt = null;
     Music.stopAudio(true);
     setFabIcon(false);
     $("#timer-wrap").classList.remove("running");
@@ -361,7 +362,8 @@
   function start() {
     const wasPaused = state.remaining < state.totalSeconds && !!state.startedAt;
     state.running = true;
-    state.startedAt = new Date().toISOString();
+    // На resume не перезаписуємо початок сесії — це та сама сесія.
+    if (!state.startedAt) state.startedAt = new Date().toISOString();
     trackEvent(wasPaused ? "timer_resume" : "timer_start", {
       timer_mode: state.mode,
       duration_minutes: Math.round(state.totalSeconds / 60),
@@ -378,9 +380,14 @@
     if (!state.selectedTrack) {
       state.selectedTrack = Music.pickDefaultTrack();
     }
-    // запускаємо музику
+    // Resume того ж призупиненого треку зберігає поточну секунду.
+    // Новий/інший трек запускаємо з початку, як і раніше.
     if (state.selectedTrack) {
-      Music.playForTimer(state.selectedTrack);
+      const samePausedTrack = state.currentTrack &&
+        state.currentTrack.track_key === state.selectedTrack.track_key &&
+        !state.isPlaying;
+      if (samePausedTrack) Music.resume();
+      else Music.playForTimer(state.selectedTrack);
     }
   }
 
@@ -443,6 +450,7 @@
     } catch (e) {
       console.warn("Сесія не збережена:", e.message);
     }
+    state.startedAt = null;
     // оновлюємо серію + ціль на головному екрані
     refreshFocusMeta();
   }
@@ -1503,6 +1511,8 @@
 
     // Запуск нового треку
     async play(t) {
+      // Новий трек не повинен успадкувати iframe зі старої паузи.
+      state._pausedEmbedSrc = null;
       trackEvent("music_start", {
         track_kind: t.kind || "unknown",
         track_scope: t.scope || t._group || "unknown",
@@ -1684,6 +1694,7 @@
       c.classList.add("hidden");
       state.currentTrack = null;
       state.selectedTrack = null;
+      state._pausedEmbedSrc = null;
       state.isPlaying = false;
       state.playerPlaying = false;
       this._refreshPlayStates();

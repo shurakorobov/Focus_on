@@ -819,26 +819,36 @@ def _compute_streak(conn, tg_id: int) -> tuple[int, int]:
         (tg_id,),
     ).fetchall()
 
+    # SQLite повертає date(...) як str, PostgreSQL (psycopg2) — як datetime.date.
+    # Нормалізуємо до date, щоб розрахунок був однаковий на обох backend'ах.
+    def as_date(value):
+        if isinstance(value, datetime):
+            return value.date()
+        if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+            return value
+        return datetime.fromisoformat(str(value)).date()
+
+    day_set = {as_date(row["d"]) for row in days}
+
     # поточна серія: дозволяємо «сьогодні ще немає сесії» → починаємо з учора
     streak = 0
     today_date = datetime.now(timezone.utc).date()
-    day_set = {row["d"] for row in days}
     cursor = today_date
-    if today_date.isoformat() not in day_set:
+    if cursor not in day_set:
         cursor = today_date - timedelta(days=1)
-    while cursor.isoformat() in day_set:
+    while cursor in day_set:
         streak += 1
         cursor = cursor - timedelta(days=1)
 
     # найкраща серія: найдовший ряд послідовних днів
     best_streak = 0
-    if days:
-        sorted_days = sorted({row["d"] for row in days})
+    if day_set:
+        sorted_days = sorted(day_set)
         cur = 1
         best_streak = 1
         for i in range(1, len(sorted_days)):
-            prev = datetime.fromisoformat(sorted_days[i - 1]).date()
-            this = datetime.fromisoformat(sorted_days[i]).date()
+            prev = sorted_days[i - 1]
+            this = sorted_days[i]
             if (this - prev).days == 1:
                 cur += 1
                 best_streak = max(best_streak, cur)
