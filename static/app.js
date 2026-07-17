@@ -36,6 +36,22 @@
   // тема до ініціалізації решти
   applyTheme(getStoredTheme());
 
+  // ── Слухач повідомлень від Android foreground service ────────
+  // У Android WebView (iframe) Kotlin шле postMessage через батьківське вікно.
+  // { type: 'focus_finished' } → завершуємо сесію фронтендом.
+  window.addEventListener("message", (e) => {
+    const d = e.data || {};
+    if (!d || typeof d !== "object") return;
+    if (d.type === "focus_finished") {
+      // service досчитав до нуля — завершуємо UI
+      if (state.running) {
+        state.remaining = 0;
+        renderTimer();
+        finish(true);
+      }
+    }
+  });
+
   // ---------- Стан ----------
   const MODES = {
     deep_work: { label: "Глибока робота", dur: 50 * 60, color: "#bf5af2" },
@@ -336,6 +352,28 @@
     else start();
   }
 
+  // ── Нативний міст (Android foreground service) ───────────────
+  // У Android-застосунку window.AndroidNative доступний через JavascriptInterface.
+  // У Mini App його нема — музика/таймер живуть у WebView як звичайно.
+  function isNativeBridge() {
+    return typeof window.AndroidNative !== "undefined" && window.AndroidNative && window.AndroidNative.ping;
+  }
+  // Запуск foreground service: тримає таймер + аудіо при згортанні застосунку
+  function nativeStartFocus() {
+    if (!isNativeBridge()) return;
+    try {
+      const url = (state.currentTrack && state.currentTrack.kind === "audio")
+        ? (state.currentTrack.url || "")
+        : "";
+      const title = state.currentTrack ? (state.currentTrack.title || "Focus ON") : "Focus ON";
+      window.AndroidNative.startFocus(state.totalSeconds, url, title);
+    } catch (e) { console.warn("nativeStartFocus", e); }
+  }
+  function nativeStopFocus() {
+    if (!isNativeBridge()) return;
+    try { window.AndroidNative.stopFocus(); } catch (e) {}
+  }
+
   // STOP: довге утримання на таймері — повне скидання лічильника
   function stop() {
     const elapsedBeforeStop = Math.max(0, state.totalSeconds - state.remaining);
@@ -344,6 +382,7 @@
     state.remaining = state.totalSeconds;
     state.startedAt = null;
     Music.stopAudio(true);
+    nativeStopFocus();
     setFabIcon(false);
     $("#timer-wrap").classList.remove("running");
     $("#phase-label").textContent = "Скинуто · тап щоб почати";
@@ -389,6 +428,8 @@
       if (samePausedTrack) Music.resume();
       else Music.playForTimer(state.selectedTrack);
     }
+    // Android: запускаємо foreground service для фонового таймера + аудіо
+    if (!wasPaused) nativeStartFocus();
   }
 
   function pause() {
@@ -413,6 +454,7 @@
     state.running = false;
     setFabIcon(false);
     $("#timer-wrap").classList.remove("running");
+    nativeStopFocus();
 
     // зупиняємо музику
     Music.stopAudio(true);

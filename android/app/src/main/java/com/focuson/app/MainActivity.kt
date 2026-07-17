@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -174,7 +175,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ── WebView з інжекцією JWT ──────────────────────────────────
+    // ── WebView з інжекцією JWT + нативний міст ──────────────────
     @SuppressLint("SetJavaScriptEnabled")
     @Composable
     private fun FocusWebView(jwt: String, onLogout: () -> Unit) {
@@ -186,6 +187,29 @@ class MainActivity : ComponentActivity() {
                     settings.mediaPlaybackRequiresUserGesture = false
                     webChromeClient = WebChromeClient()
                     webViewClient = WebViewClient()
+
+                    // Нативний міст: JS викликає AndroidNative.startFocus(...)
+                    addJavascriptInterface(NativeBridge(this@MainActivity, this), "AndroidNative")
+
+                    // Реєструємо callback'и від FocusService → оновлення UI через JS
+                    FocusBridge.tick = { sec ->
+                        post {
+                            evaluateJavascript(
+                                "(function(){try{var f=document.getElementById('f');" +
+                                "if(f&&f.contentWindow)f.contentWindow.postMessage(" +
+                                "{type:'focus_tick',remaining:$sec},'*');}catch(e){}})();", null
+                            )
+                        }
+                    }
+                    FocusBridge.finished = {
+                        post {
+                            evaluateJavascript(
+                                "(function(){try{var f=document.getElementById('f');" +
+                                "if(f&&f.contentWindow)f.contentWindow.postMessage(" +
+                                "{type:'focus_finished'},'*');}catch(e){}})();", null
+                            )
+                        }
+                    }
                     // Завантажуємо сторінку з інжекцією JWT через обгортку fetch
                     val html = """
                         <!DOCTYPE html><html><head><meta charset="utf-8">
@@ -272,4 +296,39 @@ class MainActivity : ComponentActivity() {
     private fun getBotId(): String {
         return "8922920802"
     }
+}
+
+/**
+ * JavascriptInterface: JS викликає AndroidNative.startFocus(duration, url, title).
+ * ВАЖЛИВО: @JavascriptInterface потрібен для безпеки (Android 4.2+).
+ */
+class NativeBridge(private val activity: ComponentActivity, private val webView: WebView) {
+
+    @JavascriptInterface
+    fun startFocus(durationSec: Int, trackUrl: String, trackTitle: String) {
+        Log.i("NativeBridge", "startFocus dur=$durationSec url=${trackUrl.take(40)}")
+        val intent = Intent(activity, FocusService::class.java).apply {
+            action = FocusService.ACTION_START
+            putExtra(FocusService.EXTRA_DURATION, durationSec)
+            putExtra(FocusService.EXTRA_TRACK_URL, trackUrl)
+            putExtra(FocusService.EXTRA_TRACK_TITLE, trackTitle)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            activity.startForegroundService(intent)
+        } else {
+            activity.startService(intent)
+        }
+    }
+
+    @JavascriptInterface
+    fun stopFocus() {
+        Log.i("NativeBridge", "stopFocus")
+        val intent = Intent(activity, FocusService::class.java).apply {
+            action = FocusService.ACTION_STOP
+        }
+        activity.startService(intent)
+    }
+
+    @JavascriptInterface
+    fun ping(): String = "native-bridge-ok"
 }
