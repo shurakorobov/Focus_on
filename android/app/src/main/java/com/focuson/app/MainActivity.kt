@@ -37,7 +37,7 @@ import java.net.URLEncoder
 // Для тесту на емуляторі: 10.0.2.2 = хост-машина (твій локальний сервер)
 // Для релізу: замінити на Render URL, напр. https://focus-on.onrender.com
 object AppConfig {
-    const val BASE_URL = "http://10.0.2.2:8000"
+    const val BASE_URL = "https://focus-on.onrender.com"
     // Telegram bot username для Login Widget (без @)
     const val BOT_USERNAME = "focuson_on_bot"
 }
