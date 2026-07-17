@@ -8,3 +8,12 @@ local.properties
 *.aab
 captures/
 .cxx/
+
+# Signing secrets — НІКОЛИ не комітити
+*.jks
+*.keystore
+keystore.properties
+KEYS_AND_PASSWORDS.txt
+
+# Тимчасові скріншоти з емулятора (тести)
+screenshot-*.png

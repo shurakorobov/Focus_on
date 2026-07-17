@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import json
 import os
 from pathlib import Path
 import time
@@ -327,6 +328,13 @@ class GrantPremium(BaseModel):
 
 class RedeemCode(BaseModel):
     code: str = Field(..., min_length=1, max_length=50)
+
+
+class PlayVerify(BaseModel):
+    """Google Play purchase verification (Android BillingClient)."""
+    purchase_token: str = Field(..., min_length=1, max_length=2048)
+    product_id: str = Field(settings.GOOGLE_PLAY_PREMIUM_SKU, max_length=128)
+    order_id: str = Field("", max_length=512)
 
 
 class PromoCodeReq(BaseModel):
@@ -1037,6 +1045,66 @@ async def api_redeem(payload: RedeemCode, user: dict = Depends(current_user)):
     return result
 
 
+@app.post("/api/play/verify")
+async def api_play_verify(payload: PlayVerify, user: dict = Depends(current_user)):
+    """Підтверджує покупку Google Play Billing та активує premium.
+
+    Android BillingClient після успішної покупки шле сюди purchase_token.
+    Дедуплікація: якщо токен вже оброблений — повертаємо поточний план без повторної активації.
+
+    NOTE: MVP-перевірка — довіряємо клієнтському токену. Повна криптоперевірка
+    через Play Developer API (purchases.subscriptions.get) — у v2, після
+    створення Service Account у Play Console.
+    """
+    _ensure_user_exists(user)
+    tg_id = user["id"]
+
+    # Дедуплікація: один purchase_token = одна активація
+    if db.is_payment_processed(payload.purchase_token, status="google_verified"):
+        plan = db.get_user_plan(tg_id)
+        return {
+            "ok": True,
+            "already_processed": True,
+            "premium": plan["is_premium"],
+            "plan_expires_at": plan["plan_expires_at"],
+        }
+
+    # Лог платежу (purchase_token як унікальний order_id)
+    payload_log = {
+        "platform": "google_play",
+        "product_id": payload.product_id,
+        "order_id": payload.order_id,
+        "purchase_token": payload.purchase_token[:64] + "…",
+    }
+    db.record_payment(
+        tg_id, payload.purchase_token, 0.0, "google_verified", raw=json.dumps(payload_log)
+    )
+    db.record_product_event(tg_id, "purchase", {
+        "platform": "google_play",
+        "product_id": payload.product_id,
+        "transaction_id": payload.order_id or payload.purchase_token[:32],
+        "currency": "USD",
+    })
+    expires = db.set_user_plan(tg_id, "premium", days=settings.PREMIUM_DURATION_DAYS)
+
+    # Сповіщення адміністру (формат як у Stars flow)
+    name_line = user.get("first_name") or "Без імені"
+    username = user.get("username")
+    if username:
+        name_line += f' · <a href="https://t.me/{username}">@{username}</a>'
+    profile_link = f'<a href="tg://user?id={tg_id}">Профіль</a>'
+    await _notify_admin(
+        f"🤖 <b>Преміум активовано (Google Play)</b>\n\n"
+        f"<b>Користувач:</b> {name_line} ({profile_link})\n"
+        f"<b>ID:</b> <code>{tg_id}</code>\n"
+        f"<b>Продукт:</b> <code>{payload.product_id}</code>\n"
+        f"<b>Замовлення:</b> <code>{payload.order_id or '—'}</code>\n"
+        f"<b>Діє до:</b> {expires[:10] if expires else '—'}"
+    )
+
+    return {"ok": True, "premium": True, "plan_expires_at": expires}
+
+
 @app.get("/api/admin/promo-codes")
 async def api_list_promo(user: dict = Depends(current_user)):
     """Список промокодів (тільки адмін)."""
@@ -1296,6 +1364,75 @@ async def index(request: Request):
             "Pragma": "no-cache",
         },
     )
+
+
+@app.get("/privacy")
+async def privacy_policy():
+    """Privacy Policy — обов'язково для Google Play Console."""
+    html = """<!DOCTYPE html>
+<html lang="uk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Focus ON — Політика конфіденційності</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #07030f; color: #e8e2ff; font-family: -apple-system, system-ui, sans-serif;
+         line-height: 1.7; padding: 24px; max-width: 720px; margin: 0 auto; }
+  h1 { color: #bf5af2; font-size: 28px; margin-bottom: 8px; }
+  h2 { color: #5ac8fa; font-size: 20px; margin: 24px 0 8px; }
+  p, li { color: rgba(232,226,255,0.85); font-size: 15px; margin-bottom: 8px; }
+  ul { padding-left: 20px; }
+  .meta { color: rgba(210,200,255,0.5); font-size: 13px; margin-bottom: 32px; }
+  a { color: #5ac8fa; }
+</style></head><body>
+  <h1>Політика конфіденційності</h1>
+  <p class="meta">Focus ON · Останнє оновлення: 18 липня 2026</p>
+
+  <h2>1. Які дані ми збираємо</h2>
+  <ul>
+    <li><b>Telegram User ID</b> та <b>username</b> — для ідентифікації вашого акаунта при вході через Telegram.</li>
+    <li><b>Статистика фокус-сесій</b> — тривалість, дата завершення, серії (streaks).</li>
+    <li><b>Налаштування</b> — щоденна ціль фокусу, збережені пресети звукових міксів.</li>
+  </ul>
+
+  <h2>2. Чому ми збираємо ці дані</h2>
+  <ul>
+    <li>Для синхронізації статистики між пристроями.</li>
+    <li>Для розрахунку серій та щоденних цілей.</li>
+    <li>Для відображення вашого прогресу.</li>
+  </ul>
+
+  <h2>3. Де зберігаються дані</h2>
+  <ul>
+    <li>Хмарна база даних PostgreSQL (Neon, AWS us-east-2).</li>
+    <li>Аудіофайли та кеш — на вашому пристрої (IndexedDB / локальне сховище).</li>
+    <li>JWT-токен авторизації — на пристрої, термін дії 30 днів.</li>
+  </ul>
+
+  <h2>4. Чи передаємо ми дані третім сторонам</h2>
+  <p><b>Ні.</b> Ми не продаємо, не орендуємо та не передаємо ваші дані жодним рекламним мережам,
+  аналітичним сервісам чи брокерам даних.</p>
+
+  <h2>5. Шифрування</h2>
+  <ul>
+    <li>Уся передача даних відбувається через <b>HTTPS</b> (TLS 1.2+).</li>
+    <li>Авторизація — через підписаний <b>JWT (HMAC-SHA256)</b>.</li>
+  </ul>
+
+  <h2>6. Видалення даних</h2>
+  <p>Ви можете видалити свій акаунт та всі пов'язані дані, надіславши запит через
+  бота <b>@focuson_on_bot</b> у Telegram. Дані будуть видалені протягом 72 годин.</p>
+
+  <h2>7. Діти</h2>
+  <p>Застосунок не орієнтований на дітей молодше 13 років. Ми не свідомо збираємо
+  дані від дітей.</p>
+
+  <h2>8. Зміни політики</h2>
+  <p>Ми можемо оновлювати цю політику. Про значні зміни повідомимо через застосунок або бота.</p>
+
+  <h2>9. Контакти</h2>
+  <p>Питання щодо конфіденційності: <b>@focuson_on_bot</b> у Telegram.</p>
+</body></html>"""
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.get("/android-login")

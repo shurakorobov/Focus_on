@@ -1221,6 +1221,22 @@ def record_payment(
     # NOTE: _notify_changed() викликається у app.py після обробки платежу
 
 
+def is_payment_processed(order_id: str, status: str = "google_verified") -> bool:
+    """Перевіряє, чи вже оброблений платіж (дедуплікація для Google Play).
+
+    `order_id` — це Play purchase_token (унікальний для кожної покупки).
+    Повертає True, якщо запис з таким order_id+status вже є → не активуємо premium повторно.
+    """
+    if not order_id:
+        return False
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM payments WHERE order_id = ? AND status = ? LIMIT 1",
+            (order_id, status),
+        ).fetchone()
+        return row is not None
+
+
 # ------------------------------ статистика прослуховувань -------------------
 
 

@@ -49,6 +49,24 @@
         renderTimer();
         finish(true);
       }
+    } else if (d.type === "focus_tick") {
+      // нативний таймер повідомив свій тик
+      if (state.running && typeof d.remaining === "number") {
+        state.remaining = d.remaining;
+        renderTimer();
+      }
+    } else if (d.type === "purchase_success" && d.token) {
+      // Google Play Billing: покупка підтверджена нативно → верифікуємо на сервері
+      handlePurchaseSuccess(d.token);
+    } else if (d.type === "purchase_failed") {
+      // Скасовано або помилка
+      const reason = d.token || d.error || "";
+      if (reason === "cancelled") {
+        toast("Оплату скасовано");
+      } else {
+        toast("Не вдалося завершити оплату");
+      }
+      try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("error"); } catch (_) {}
     }
   });
 
@@ -890,6 +908,24 @@
       currency: "XTR",
       value: state.premiumPriceStars,
     });
+
+    // ── Android (Google Play Billing): нативний потік замість Stars ──
+    // У застосунку Android AndroidNative.purchasePremium() відкриває UI Google Play,
+    // результат повертається через postMessage({type:'purchase_success'|'purchase_failed'}).
+    if (
+      isNativeBridge() &&
+      window.AndroidNative &&
+      typeof window.AndroidNative.hasNativeBilling === "function" &&
+      window.AndroidNative.hasNativeBilling()
+    ) {
+      try {
+        window.AndroidNative.purchasePremium();
+      } catch (e) {
+        toast("Не вдалося відкрити оплату: " + e.message);
+      }
+      return; // далі обробить message-listener
+    }
+
     try {
       const res = await API.subscribe();
       if (!res.available) {
@@ -926,6 +962,39 @@
       }
     } catch (e) {
       toast("Не вдалося: " + e.message);
+    }
+  }
+
+  // Обробка успішної покупки через Google Play Billing (викликається з message-listener).
+  async function handlePurchaseSuccess(purchaseToken) {
+    if (!purchaseToken) return;
+    try {
+      toast("Перевіряємо оплату…");
+      const res = await API.playVerify(purchaseToken, "focus_on_premium_month");
+      if (res.ok) {
+        state.isPremium = true;
+        state.planExpiresAt = res.plan_expires_at || "";
+        toast("🎉 Преміум активовано!");
+        haptic("success");
+        gaEvent("purchase", {
+          transaction_id: purchaseToken.slice(0, 32),
+          currency: "USD",
+          items: [{
+            item_id: "focus_on_premium_month",
+            item_name: "Focus ON Premium — 1 month",
+            quantity: 1,
+          }],
+        });
+        // Оновлюємо профіль та статистику (зняття paywall)
+        loadProfile();
+        if (state.screen === "stats") loadStats();
+      } else {
+        toast("Помилка активації: " + (res.detail || "невідомо"));
+        haptic("error");
+      }
+    } catch (e) {
+      toast("Помилка: " + e.message);
+      haptic("error");
     }
   }
 

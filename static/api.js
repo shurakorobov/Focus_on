@@ -94,6 +94,11 @@ const API = (() => {
 
     // підписка
     subscribe: () => request("POST", "/api/subscribe"),
+    // Google Play Billing: верифікація purchase_token → активація premium (Android)
+    playVerify: (purchaseToken, productId = "focus_on_premium_month") =>
+      request("POST", "/api/play/verify", {
+        json: { purchase_token: purchaseToken, product_id: productId },
+      }),
     grantPremium: (tg_id, days) =>
       request("POST", "/api/admin/grant-premium", { json: { tg_id, days } }),
     adminStats: () => request("GET", "/api/admin/stats"),

@@ -54,6 +54,10 @@ class Settings:
     PREMIUM_DURATION_DAYS: int = int(os.getenv("PREMIUM_DURATION_DAYS", "30"))
     # Ліміт завантажень треків для безкоштовних користувачів.
     FREE_UPLOAD_LIMIT: int = int(os.getenv("FREE_UPLOAD_LIMIT", "5"))
+    # Google Play Billing: SKU місячної підписки (використовується в Android-клієнті
+    # та як дефолт product_id для /api/play/verify). Ідентифікатор має збігатись
+    # з продуктом, створеним у Play Console → Products → Subscriptions.
+    GOOGLE_PLAY_PREMIUM_SKU: str = os.getenv("GOOGLE_PLAY_PREMIUM_SKU", "focus_on_premium_month")
 
     # Куди слати баг-репорти (Telegram chat_id). За замовч. — перший адмін.
     ADMIN_CHAT_ID: int = int(os.getenv("ADMIN_CHAT_ID", "0")) or (

@@ -40,6 +40,8 @@ object AppConfig {
     const val BASE_URL = "https://focus-on.onrender.com"
     // Telegram bot username для Login Widget (без @)
     const val BOT_USERNAME = "focuson_on_bot"
+    // SKU місячної підписки premium у Google Play Console
+    const val PREMIUM_SKU = "focus_on_premium_month"
 }
 
 class MainActivity : ComponentActivity() {
@@ -52,6 +54,9 @@ class MainActivity : ComponentActivity() {
 
     // Колбек від Telegram Login (через deep link / intent)
     private var onLoginResult: ((String) -> Unit)? = null
+
+    // BillingClient менеджер (створюється при FocusWebView init)
+    private var billingManager: BillingManager? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,6 +75,17 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Підключаємо BillingClient при вході в foreground
+        billingManager?.startConnection()
+    }
+
+    override fun onDestroy() {
+        billingManager?.endConnection()
+        super.onDestroy()
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -140,8 +156,14 @@ class MainActivity : ComponentActivity() {
                     webChromeClient = WebChromeClient()
                     webViewClient = WebViewClient()
 
-                    // Нативний міст: JS викликає AndroidNative.startFocus(...)
-                    addJavascriptInterface(NativeBridge(this@MainActivity, this), "AndroidNative")
+                    // Нативний міст: JS викликає AndroidNative.startFocus(...) і .purchasePremium()
+                    val billing = BillingManager(
+                        context = this@MainActivity,
+                        skuId = AppConfig.PREMIUM_SKU,
+                        onResult = { ok, token -> BillingBridge.onPurchaseResult?.invoke(ok, token) }
+                    )
+                    billingManager = billing
+                    addJavascriptInterface(NativeBridge(this@MainActivity, this, billing), "AndroidNative")
 
                     // Реєструємо callback'и від FocusService → оновлення UI через JS
                     FocusBridge.tick = { sec ->
@@ -159,6 +181,21 @@ class MainActivity : ComponentActivity() {
                                 "(function(){try{var f=document.getElementById('f');" +
                                 "if(f&&f.contentWindow)f.contentWindow.postMessage(" +
                                 "{type:'focus_finished'},'*');}catch(e){}})();", null
+                            )
+                        }
+                    }
+                    // Результат покупки premium → postMessage в iframe
+                    BillingBridge.onPurchaseResult = { ok, token ->
+                        post {
+                            // JSON-кодуємо token безпечно (екрануєє спецсимволи/кавички)
+                            val payload = JSONObject()
+                                .put("type", if (ok) "purchase_success" else "purchase_failed")
+                                .put("token", token)
+                                .toString()
+                            evaluateJavascript(
+                                "(function(){try{var f=document.getElementById('f');" +
+                                "if(f&&f.contentWindow)f.contentWindow.postMessage(" +
+                                "$payload,'*');}catch(e){}})();", null
                             )
                         }
                     }
@@ -251,10 +288,15 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * JavascriptInterface: JS викликає AndroidNative.startFocus(duration, url, title).
+ * JavascriptInterface: JS викликає AndroidNative.startFocus(duration, url, title)
+ * або .purchasePremium() для підписки через Google Play Billing.
  * ВАЖЛИВО: @JavascriptInterface потрібен для безпеки (Android 4.2+).
  */
-class NativeBridge(private val activity: ComponentActivity, private val webView: WebView) {
+class NativeBridge(
+    private val activity: ComponentActivity,
+    private val webView: WebView,
+    private val billing: BillingManager,
+) {
 
     @JavascriptInterface
     fun startFocus(durationSec: Int, trackUrl: String, trackTitle: String) {
@@ -281,6 +323,27 @@ class NativeBridge(private val activity: ComponentActivity, private val webView:
         activity.startService(intent)
     }
 
+    /** Запускає нативний UI Google Play для купівлі місячної підписки premium. */
+    @JavascriptInterface
+    fun purchasePremium() {
+        Log.i("NativeBridge", "purchasePremium")
+        activity.runOnUiThread { billing.purchasePremium(activity) }
+    }
+
+    /** JS-флаг: чи доступна нативна оплата (Google Play Billing). */
+    @JavascriptInterface
+    fun hasNativeBilling(): Boolean = true
+
     @JavascriptInterface
     fun ping(): String = "native-bridge-ok"
+}
+
+/**
+ * Синглтон-міст для результатів Google Play Billing → WebView.
+ * BillingManager викликає onPurchaseResult(ok, token),
+ * MainActivity реєструє лямбду, що кидає postMessage в iframe.
+ * (Mirror патерну FocusBridge у FocusService.kt.)
+ */
+object BillingBridge {
+    var onPurchaseResult: ((ok: Boolean, token: String) -> Unit)? = null
 }
