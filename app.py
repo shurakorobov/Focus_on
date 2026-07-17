@@ -21,7 +21,8 @@ from pydantic import BaseModel, Field
 import db
 import storage
 from config import settings
-from telegram_auth import authenticate
+from telegram_auth import authenticate, verify_login_widget
+from jwt_auth import create_token, verify_token
 
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
@@ -198,21 +199,30 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 def current_user(request: Request) -> dict:
-    """DI-залежність: витягує та перевіряє Telegram initData з запиту.
+    """DI-залежність: автентифікує запит.
 
-    initData може приходити:
-      - у заголовку Authorization: Bearer <initData...>
-      - у тілі запиту як поле init_data
-      - у query-параметрі ?init_data=...
+    Підтримує два механізми:
+      1. Telegram WebApp initData (Mini App) — заголовок Bearer <initData>,
+         query ?init_data= або поле init_data у тілі.
+      2. JWT-токен (Android-клієнт) — заголовок Bearer <jwt> після входу
+         через /api/auth/telegram-login.
     """
-    init_data = ""
-
     auth = request.headers.get("authorization", "")
+    token = ""
     if auth.lower().startswith("bearer "):
-        init_data = auth[7:].strip()
-    elif "init_data" in request.query_params:
-        init_data = request.query_params["init_data"]
+        token = auth[7:].strip()
 
+    # спершу пробуємо JWT (формат: три частини через крапку)
+    if token and token.count(".") == 2:
+        user = verify_token(token)
+        if user:
+            return user
+        raise HTTPException(status_code=401, detail="invalid jwt")
+
+    # інакше — Telegram initData
+    init_data = token
+    if not init_data and "init_data" in request.query_params:
+        init_data = request.query_params["init_data"]
     if not init_data:
         try:
             body = request.scope.get("_body_json") or {}
@@ -350,6 +360,26 @@ class ProductEventReq(BaseModel):
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok", "configured": settings.is_configured}
+
+
+class TelegramLoginReq(BaseModel):
+    """Тіло запиту /api/auth/telegram-login.
+    auth_data — повний query-string від Telegram Login Widget (з хешем)."""
+    auth_data: str
+
+
+@app.post("/api/auth/telegram-login")
+async def api_telegram_login(payload: TelegramLoginReq):
+    """Обмін Telegram Login Widget payload на наш JWT.
+    Android-клієнт викликає цей endpoint після входу через Telegram,
+    отримує JWT і надалі шле його у заголовку Authorization: Bearer <jwt>."""
+    user = verify_login_widget(payload.auth_data, settings.BOT_TOKEN)
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid telegram login")
+    # переконуємось що користувач існує в БД
+    _ensure_user_exists(user)
+    token = create_token(user)
+    return {"ok": True, "token": token, "user": user}
 
 
 @app.post("/api/attribution/click")

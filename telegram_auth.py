@@ -68,3 +68,47 @@ def verify_init_data(init_data: str, bot_token: str) -> Optional[dict]:
 def authenticate(init_data: str) -> Optional[dict]:
     """Зручна обгортка: перевіряє initData з налаштувань проєкту."""
     return verify_init_data(init_data, settings.BOT_TOKEN)
+
+
+def verify_login_widget(auth_payload: str, bot_token: str) -> Optional[dict]:
+    """Перевіряє підпис Telegram Login Widget.
+
+    На відміну від initData (де user — JSON-рядок), Login Widget повертає
+    поля користувача на верхньому рівні query-string:
+      id=...&first_name=...&last_name=...&username=...&photo_url=...&auth_date=...&hash=...
+
+    Алгоритм той самий, що й для initData:
+    https://core.telegram.org/widgets/login#checking-authorization
+
+    Повертає словник користувача або None.
+    """
+    if not auth_payload or not bot_token:
+        return None
+    try:
+        parsed = dict(urllib.parse.parse_qsl(auth_payload, keep_blank_values=True))
+    except ValueError:
+        return None
+
+    received_hash = parsed.pop("hash", None)
+    if not received_hash:
+        return None
+
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+    secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+    computed_hash = hmac.new(
+        secret_key, data_check_string.encode(), hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(computed_hash, received_hash):
+        return None
+
+    # Поля користувача — на верхньому рівні
+    return {
+        "id": int(parsed.get("id", 0)),
+        "tg_id": int(parsed.get("id", 0)),
+        "first_name": parsed.get("first_name", ""),
+        "last_name": parsed.get("last_name", ""),
+        "username": parsed.get("username", ""),
+        "photo_url": parsed.get("photo_url", ""),
+        "auth_date": int(parsed["auth_date"]) if parsed.get("auth_date", "").isdigit() else 0,
+    }

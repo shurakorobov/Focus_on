@@ -25,6 +25,9 @@ class Settings:
     DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
     # Версія застосунку (SemVer). Bump вручну при релізі.
     APP_VERSION: str = os.getenv("APP_VERSION", "0.1.0-beta")
+    # Секрет для підпису JWT-токенів (автентифікація Android-клієнта).
+    # За замовч. деривується з BOT_TOKEN, щоб не вимагати додаткового налаштування.
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "")
 
     # Список Telegram ID адміністраторів (через кому): хто може додавати
     # загальну музику та завантажувати файли в хмару.
@@ -74,6 +77,17 @@ class Settings:
     def use_postgres(self) -> bool:
         """Чи використовуємо PostgreSQL (продакшн) замість SQLite (локально)."""
         return bool(self.DATABASE_URL)
+
+    @property
+    def jwt_secret(self) -> str:
+        """Секрет для JWT: явний JWT_SECRET або деривація з BOT_TOKEN.
+        Деривація — щоб не ламати існуючі деплої без нового env."""
+        if self.JWT_SECRET:
+            return self.JWT_SECRET
+        if self.BOT_TOKEN:
+            import hashlib
+            return "fx_" + hashlib.sha256(("jwt|" + self.BOT_TOKEN).encode()).hexdigest()
+        return "fx_dev_insecure_secret"
 
     @property
     def stars_enabled(self) -> bool:
