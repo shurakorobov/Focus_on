@@ -1298,6 +1298,75 @@ async def index(request: Request):
     )
 
 
+@app.get("/android-login")
+async def android_login(request: Request):
+    """Сторінка логіну для Android-клієнта.
+    Показує Telegram Login Widget усередині WebView.
+    Після успішного входу відправляє auth_data на /api/auth/telegram-login,
+    отримує JWT і передає його через AndroidNative.onLogin(token) JS-міст."""
+    bot_id = settings.BOT_TOKEN.split(":")[0] if settings.BOT_TOKEN else ""
+    bot_username = os.getenv("BOT_USERNAME", "focuson_on_bot")
+    bot_domain = settings.WEBAPP_URL.rstrip("/").replace("https://", "").replace("http://", "") if settings.WEBAPP_URL else request.url.hostname
+    html = f"""<!DOCTYPE html>
+<html lang="uk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Focus ON — Вхід</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ background: #07030f; color: #fff; font-family: -apple-system, system-ui, sans-serif;
+          min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; padding: 24px; }}
+  h1 {{ color: #bf5af2; font-size: 32px; font-weight: 800; margin-bottom: 8px; }}
+  p {{ color: rgba(210,200,255,0.7); font-size: 15px; text-align: center; line-height: 1.5; margin-bottom: 32px; }}
+  #widget {{ margin-bottom: 24px; }}
+  #status {{ color: rgba(210,200,255,0.5); font-size: 14px; min-height: 20px; }}
+  .err {{ color: #ff453a; }}
+  .ok {{ color: #30d158; }}
+</style></head><body>
+  <h1>🎯 Focus ON</h1>
+  <p>Увійдіть через Telegram,<br>щоб синхронізувати прогрес</p>
+  <div id="widget">
+    <script async src="https://telegram.org/js/telegram-widget.js?22"
+      data-telegram-login="{bot_username}"
+      data-size="large"
+      data-onauth="onTelegramAuth(user)"
+      data-request-access="write"></script>
+  </div>
+  <div id="status"></div>
+<script>
+  //Telegram Widget викличе цю функцію після успішного входу
+  function onTelegramAuth(user) {{
+    document.getElementById('status').innerHTML = '<span class="ok">✅ Вхід виконано, обмін на токен…</span>';
+    // user — об'єкт з полями id, first_name, username тощо + hash
+    var params = new URLSearchParams();
+    Object.keys(user).forEach(function(k) {{ params.append(k, user[k]); }});
+    fetch('/api/auth/telegram-login', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ auth_data: params.toString() }})
+    }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
+      if (d.token) {{
+        document.getElementById('status').innerHTML = '<span class="ok">Токен отримано ✓</span>';
+        // Передаємо JWT в Android через нативний міст
+        if (window.AndroidNative && window.AndroidNative.onLogin) {{
+          window.AndroidNative.onLogin(d.token);
+        }} else {{
+          // fallback: зберегти в localStorage (тест у браузері)
+          localStorage.setItem('focus_jwt', d.token);
+          document.getElementById('status').innerHTML = '<span class="ok">Успіх! Можна закрити сторінку.</span>';
+        }}
+      }} else {{
+        document.getElementById('status').innerHTML = '<span class="err">Помилка: ' + (d.detail || 'невідомо') + '</span>';
+      }}
+    }}).catch(function(e) {{
+      document.getElementById('status').innerHTML = '<span class="err">Мережева помилка</span>';
+    }});
+  }}
+</script>
+</body></html>"""
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
 # Запуск через python app.py
 if __name__ == "__main__":
     import uvicorn

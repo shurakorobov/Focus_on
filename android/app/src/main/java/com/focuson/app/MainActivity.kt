@@ -83,7 +83,12 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun AppContent() {
         var jwt by remember { mutableStateOf(getSavedJwt()) }
-        val scope = rememberCoroutineScope()
+
+        // Колбек з LoginScreen (через NativeBridge.onLogin з WebView)
+        onLoginResult = { token ->
+            saveJwt(token)
+            jwt = token
+        }
 
         if (jwt != null) {
             FocusWebView(jwt = jwt!!, onLogout = {
@@ -91,88 +96,35 @@ class MainActivity : ComponentActivity() {
                 jwt = null
             })
         } else {
-            LoginScreen(onLogin = { authData ->
-                scope.launch {
-                    val token = exchangeTelegramLogin(authData)
-                    if (token != null) {
-                        saveJwt(token)
-                        jwt = token
-                    }
-                }
-            })
+            LoginScreen()
         }
     }
 
     // ── Екран входу ──────────────────────────────────────────────
+    // WebView зі сторінкою /android-login. Telegram Login Widget відпрацює
+    // всередині WebView і передасть JWT через AndroidNative.onLogin(token).
+    @SuppressLint("SetJavaScriptEnabled")
     @Composable
-    private fun LoginScreen(onLogin: (String) -> Unit) {
-        val ctx = LocalContext.current
-        var loading by remember { mutableStateOf(false) }
-
-        // Реєструємо колбек для intent-результату
-        DisposableEffect(Unit) {
-            onLoginResult = { authData ->
-                loading = true
-                onLogin(authData)
-            }
-            onDispose { onLoginResult = null }
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text(
-                "🎯 Focus ON",
-                color = Color(0xFFbf5af2),
-                fontSize = 36.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Таймер глибокої концентрації\nз музикою та звуками",
-                color = Color(0xFFd2c8ff),
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
-            )
-            Spacer(Modifier.height(48.dp))
-            Button(
-                onClick = {
-                    // Відкриваємо Telegram Login Widget у браузері
-                    val url = "https://oauth.telegram.org/auth" +
-                            "?bot_id=${getBotId()}" +
-                            "&origin=" + URLEncoder.encode(AppConfig.BASE_URL, "UTF-8") +
-                            "&request_access=write"
-                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                },
-                enabled = !loading,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFbf5af2)),
-            ) {
-                if (loading) {
-                    CircularProgressIndicator(
-                        color = Color.White,
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(24.dp)
-                    )
-                } else {
-                    Text("Увійти через Telegram", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    private fun LoginScreen() {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    webViewClient = WebViewClient()
+                    webChromeClient = WebChromeClient()
+                    // Міст: сторінка /android-login викличе AndroidNative.onLogin(token)
+                    addJavascriptInterface(object {
+                        @JavascriptInterface
+                        fun onLogin(token: String) {
+                            runOnUiThread { onLoginResult?.invoke(token) }
+                        }
+                    }, "AndroidNative")
+                    loadUrl("${AppConfig.BASE_URL}/android-login")
                 }
-            }
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Потрібен акаунт Telegram",
-                color = Color(0xFF8a7fb5),
-                fontSize = 13.sp,
-            )
-        }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 
     // ── WebView з інжекцією JWT + нативний міст ──────────────────
