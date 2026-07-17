@@ -1334,24 +1334,19 @@ async def android_login(request: Request):
   </div>
   <div id="status"></div>
 <script>
-  //Telegram Widget викличе цю функцію після успішного входу
-  function onTelegramAuth(user) {{
+  // Вигін після успішного входу: обмін auth_data → JWT → AndroidNative.onLogin
+  function exchangeAuth(params) {{
     document.getElementById('status').innerHTML = '<span class="ok">✅ Вхід виконано, обмін на токен…</span>';
-    // user — об'єкт з полями id, first_name, username тощо + hash
-    var params = new URLSearchParams();
-    Object.keys(user).forEach(function(k) {{ params.append(k, user[k]); }});
     fetch('/api/auth/telegram-login', {{
       method: 'POST',
       headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{ auth_data: params.toString() }})
+      body: JSON.stringify({{ auth_data: params }})
     }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
       if (d.token) {{
         document.getElementById('status').innerHTML = '<span class="ok">Токен отримано ✓</span>';
-        // Передаємо JWT в Android через нативний міст
         if (window.AndroidNative && window.AndroidNative.onLogin) {{
           window.AndroidNative.onLogin(d.token);
         }} else {{
-          // fallback: зберегти в localStorage (тест у браузері)
           localStorage.setItem('focus_jwt', d.token);
           document.getElementById('status').innerHTML = '<span class="ok">Успіх! Можна закрити сторінку.</span>';
         }}
@@ -1361,6 +1356,36 @@ async def android_login(request: Request):
     }}).catch(function(e) {{
       document.getElementById('status').innerHTML = '<span class="err">Мережева помилка</span>';
     }});
+  }}
+
+  // Спосіб 1: Telegram Widget викличе onTelegramAuth(user) напряму
+  function onTelegramAuth(user) {{
+    var params = new URLSearchParams();
+    Object.keys(user).forEach(function(k) {{ params.append(k, user[k]); }});
+    exchangeAuth(params.toString());
+  }}
+
+  // Спосіб 2: widget повертає результат через URL hash #tgAuthResult=<base64>
+  // (стосується, коли Telegram-апп недоступний / WebView). base64 → JSON user.
+  function checkHashResult() {{
+    var m = (location.hash || '').match(/tgAuthResult=([^&]+)/);
+    if (!m) return false;
+    try {{
+      var json = atob(decodeURIComponent(m[1]));
+      var user = JSON.parse(json);
+      var params = new URLSearchParams();
+      Object.keys(user).forEach(function(k) {{ params.append(k, user[k]); }});
+      exchangeAuth(params.toString());
+      return true;
+    }} catch (e) {{
+      document.getElementById('status').innerHTML = '<span class="err">Не вдалось розібрати результат входу</span>';
+      return false;
+    }}
+  }}
+
+  // перевіряємо hash при завантаженні та при зміні (redirect після входу)
+  if (!checkHashResult()) {{
+    window.addEventListener('hashchange', checkHashResult);
   }}
 </script>
 </body></html>"""
