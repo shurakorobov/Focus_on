@@ -46,7 +46,7 @@ object AppConfig {
     // Google OAuth Web Client ID (з Google Cloud Console).
     // Це Web Client ID, не Android — бо верифікація ID-токена на бекенді перевіряє
     // audience проти цього ID. Отримати: console.cloud.google.com → APIs & Services → Credentials.
-    const val GOOGLE_WEB_CLIENT_ID = "PASTE_YOUR_WEB_CLIENT_ID.apps.googleusercontent.com"
+    const val GOOGLE_WEB_CLIENT_ID = "736192450457-h3nlrfbdp1a3fqksmh6u87g5eomuct4o.apps.googleusercontent.com"
 }
 
 class MainActivity : ComponentActivity() {
