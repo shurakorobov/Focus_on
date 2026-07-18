@@ -302,6 +302,21 @@ def migrate() -> None:
                 created_at   TEXT NOT NULL
             );
 
+            -- Одноразові коди входу (bot-code auth для Android без Google Sign-In)
+            CREATE TABLE IF NOT EXISTS login_codes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                code        TEXT NOT NULL,
+                tg_id       INTEGER NOT NULL,
+                first_name  TEXT NOT NULL DEFAULT '',
+                last_name   TEXT NOT NULL DEFAULT '',
+                username    TEXT NOT NULL DEFAULT '',
+                photo_url   TEXT NOT NULL DEFAULT '',
+                expires_at  TEXT NOT NULL,
+                used        INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_codes_code ON login_codes(code);
+
             -- Статистика прослуховувань треків
             CREATE TABLE IF NOT EXISTS plays (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1372,6 +1387,68 @@ def is_payment_processed(order_id: str, status: str = "google_verified") -> bool
             (order_id, status),
         ).fetchone()
         return row is not None
+
+
+# ------------------------------ bot-code auth ----------------------------
+
+
+def create_login_code(
+    tg_id: int,
+    first_name: str = "",
+    last_name: str = "",
+    username: str = "",
+    photo_url: str = "",
+    ttl_seconds: int = 300,
+) -> str:
+    """Створює одноразовий 6-значний код входу (TTL 5 хв за замовч.).
+
+    Інвалідує попередні невикористані коди цього юзера.
+    Повертає код (рядок '123456').
+    """
+    code = "".join(secrets.choice("0123456789") for _ in range(6))
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=ttl_seconds)
+    with get_conn() as conn:
+        # інвалідуємо попередні невикористані коди юзера
+        conn.execute(
+            "UPDATE login_codes SET used = 1 WHERE tg_id = ? AND used = 0",
+            (tg_id,),
+        )
+        conn.execute(
+            """INSERT INTO login_codes
+               (code, tg_id, first_name, last_name, username, photo_url, expires_at, used, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+            (code, tg_id, first_name, last_name, username, photo_url,
+             expires.isoformat(), now.isoformat()),
+        )
+    return code
+
+
+def consume_login_code(code: str) -> dict | None:
+    """Витрачає код входу: повертає дані юзера або None (невірний/прострочений).
+
+    Код одноразовий — після виклику позначається used=1.
+    """
+    if not code:
+        return None
+    code = code.strip()
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM login_codes WHERE code = ? AND used = 0 AND expires_at > ? LIMIT 1",
+            (code, now),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute("UPDATE login_codes SET used = 1 WHERE id = ?", (row["id"],))
+        return {
+            "id": int(row["tg_id"]),
+            "tg_id": int(row["tg_id"]),
+            "first_name": row["first_name"] or "",
+            "last_name": row["last_name"] or "",
+            "username": row["username"] or "",
+            "photo_url": row["photo_url"] or "",
+        }
 
 
 # ------------------------------ статистика прослуховувань -------------------

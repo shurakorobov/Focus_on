@@ -510,6 +510,27 @@ async def api_google_login(payload: GoogleAuthReq):
     return {"ok": True, "token": token, "user": user}
 
 
+class ExchangeCodeReq(BaseModel):
+    """Одноразовий код входу від бота (bot-code auth)."""
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+@app.post("/api/auth/exchange-code")
+async def api_exchange_code(payload: ExchangeCodeReq):
+    """Обмін одноразового коду (з бота) на JWT.
+
+    Використовується Android-клієнтом коли Google Sign-In недоступний.
+    Юзер шле /login боту @focuson_on_bot → отримує 6-значний код → вводить тут.
+    Endpoint публічний (код сам є секретом, діє 5 хв, одноразовий).
+    """
+    user = db.consume_login_code(payload.code)
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid or expired code")
+    _ensure_user_exists(user)
+    token = create_token(user)
+    return {"ok": True, "token": token, "user": user}
+
+
 @app.post("/api/attribution/click")
 async def api_attribution_click(payload: AttributionClickReq):
     """Створює короткий токен для переходу landing → Telegram.
@@ -1096,6 +1117,8 @@ async def _handle_update(update: dict) -> None:
     if command in ("/start", "/help", "/app"):
         start_param = command_payload.strip()[:64] if command == "/start" else ""
         await _send_welcome(chat_id, start_param=start_param)
+    elif command == "/login":
+        await _send_login_code(message)
 
 
 async def _answer_pre_checkout(query_id: int, ok: bool, error_message: str = "") -> None:
@@ -1145,6 +1168,47 @@ async def _process_stars_payment(sp: dict, chat_id: int) -> None:
         f"<b>Замовлення:</b> <code>{order_id}</code>\n"
         f"<b>Діє до:</b> {expires[:10] if expires else '—'}"
     )
+
+
+async def _send_login_code(message: dict) -> None:
+    """Створює одноразовий код входу і надсилає його юзеру в Telegram.
+
+    Використовується для bot-code auth в Android-застосунку (де Google Sign-In
+    недоступний). Код діє 5 хвилин, одноразовий.
+    """
+    if not settings.has_token:
+        return
+    from_user = message.get("from") or message.get("chat") or {}
+    chat_id = message["chat"]["id"]
+    tg_id = int(from_user.get("id", chat_id))
+    first_name = from_user.get("first_name", "")
+    last_name = from_user.get("last_name", "")
+    username = from_user.get("username", "")
+    photo_url = from_user.get("photo_url", "")
+    code = db.create_login_code(
+        tg_id=tg_id,
+        first_name=first_name,
+        last_name=last_name,
+        username=username,
+        photo_url=photo_url,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "parse_mode": "HTML",
+                    "text": (
+                        f"🔑 <b>Код для входу в Focus ON</b>\n\n"
+                        f"<code>{code}</code>\n\n"
+                        f"Діє 5 хвилин. Введіть його у застосунку.\n"
+                        f"Якщо ви не запитували код — проігноруйте."
+                    ),
+                },
+            )
+    except Exception:
+        pass
 
 
 async def _send_welcome(chat_id: int, start_param: str = "") -> None:

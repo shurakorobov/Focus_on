@@ -3,6 +3,7 @@ package com.focuson.app
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -23,21 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.credentials.CredentialManager
-import androidx.credentials.CustomCredential
-import androidx.credentials.GetCredentialRequest
-import androidx.credentials.exceptions.GetCredentialCancellationException
-import androidx.credentials.exceptions.GetCredentialInterruptedException
-import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
-import androidx.credentials.exceptions.NoCredentialException
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -103,14 +90,13 @@ class MainActivity : ComponentActivity() {
                 jwt = null
             })
         } else {
-            LoginScreen(onLogin = { idToken, onResult ->
+            LoginScreen(onLogin = { code, onResult ->
                 scope.launch {
-                    val token = exchangeGoogleLogin(idToken)
+                    val token = exchangeCode(code)
                     if (token != null) {
                         saveJwt(token)
                         jwt = token
                     } else {
-                        // бекенд відхилив ID-токен
                         onResult(false)
                     }
                 }
@@ -118,212 +104,124 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ── Екран входу (Google Sign-In: One Tap + fallback на AccountPicker) ─
+    // ── Екран входу (bot-code: код з Telegram-бота) ──────────────
     @Composable
-    private fun LoginScreen(onLogin: (idToken: String, onResult: (Boolean) -> Unit) -> Unit) {
+    private fun LoginScreen(onLogin: (code: String, onResult: (Boolean) -> Unit) -> Unit) {
         val ctx = LocalContext.current
-        val scope = rememberCoroutineScope()
+        var code by remember { mutableStateOf("") }
         var loading by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<String?>(null) }
-        // Fallback launcher — якщо One Tap не спрацював, користувач може
-        // спробувати класичний діалог вибору акаунта.
-        var useFallback by remember { mutableStateOf(false) }
-
-        val signInLauncher = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.StartActivityForResult()
-        ) { result ->
-            loading = false
-            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-            try {
-                val account = task.getResult(ApiException::class.java)
-                val idToken = account.idToken
-                if (idToken != null) {
-                    loading = true
-                    error = "Обмін токена на сесію…"
-                    scope.launch {
-                        onLogin(idToken) { ok ->
-                            loading = false
-                            if (!ok) {
-                                error = "Сервер відхилив токен. Перевірте GOOGLE_OAUTH_CLIENT_ID у Render."
-                            }
-                        }
-                    }
-                } else {
-                    error = "Не вдалося отримати токен."
-                }
-            } catch (e: ApiException) {
-                val msg = when (e.statusCode) {
-                    16 -> "DEVELOPER_ERROR (16): перевірте SHA-1/package в Google Console"
-                    12501 -> "Вхід скасовано"
-                    4 -> "Вхід скасовано"
-                    10 -> "DEVELOPER_ERROR (10): Android-клієнт не знайдений у Google Console"
-                    7 -> "Помилка мережі Google"
-                    else -> "Помилка входу (${e.statusCode}): ${e.message}"
-                }
-                error = msg
-                Log.e(TAG, "GoogleSignIn ApiException statusCode=${e.statusCode}", e)
-            } catch (e: Exception) {
-                error = "Помилка: ${e.message}"
-                Log.e(TAG, "GoogleSignIn помилка", e)
-            }
-        }
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp),
+            modifier = Modifier.fillMaxSize().padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(
-                "🎯 Focus ON",
-                color = Color(0xFFbf5af2),
-                fontSize = 36.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            Text("🎯 Focus ON", color = Color(0xFFbf5af2), fontSize = 36.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text(
-                "Таймер глибокої концентрації\nз музикою та звуками",
-                color = Color(0xFFd2c8ff),
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
+            Text("Таймер глибокої концентрації\nз музикою та звуками",
+                color = Color(0xFFd2c8ff), fontSize = 15.sp, textAlign = TextAlign.Center, lineHeight = 22.sp)
+            Spacer(Modifier.height(40.dp))
+
+            // Інструкція
+            Text("1️⃣ Відкрийте бота", color = Color(0xFFd2c8ff), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(8.dp))
+            // Кнопка відкрити бота
+            OutlinedButton(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/focuson_on_bot?start=login"))
+                    ctx.startActivity(intent)
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("Отримати код @focuson_on_bot", fontSize = 14.sp, color = Color(0xFF5ac8fa))
+            }
+
+            Spacer(Modifier.height(24.dp))
+            Text("2️⃣ Надішліть боту /login", color = Color(0xFFd2c8ff), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(8.dp))
+            Text("3️⃣ Введіть отриманий код:", color = Color(0xFFd2c8ff), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(12.dp))
+
+            // Поле вводу коду (6 цифр)
+            OutlinedTextField(
+                value = code,
+                onValueChange = { v -> code = v.filter { it.isDigit() }.take(6) },
+                label = { Text("6-значний код") },
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    color = Color.White,
+                ),
             )
-            Spacer(Modifier.height(48.dp))
+
+            Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
-                    if (loading) return@Button
-                    loading = true
-                    error = null
-                    scope.launch {
-                        if (useFallback) {
-                            // Класичний GoogleSignIn Intent (повноекранний вибір)
-                            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                                .requestIdToken(AppConfig.GOOGLE_WEB_CLIENT_ID)
-                                .requestEmail()
-                                .build()
-                            val client = GoogleSignIn.getClient(ctx, gso)
-                            signInLauncher.launch(client.signInIntent)
-                        } else {
-                            // Спроба One Tap через Credential Manager
-                            val idToken = signInWithGoogleOneTap(ctx)
-                            if (idToken != null) {
-                                loading = true
-                                error = "Обмін токена на сесію…"
-                                onLogin(idToken) { ok ->
-                                    loading = false
-                                    if (!ok) {
-                                        error = "Сервер відхилив токен. Перевірте GOOGLE_OAUTH_CLIENT_ID у Render."
-                                    }
-                                }
-                            } else {
-                                loading = false
-                                val err = lastSignInError
-                                if (err != null && err.contains("скасовано", ignoreCase = true)) {
-                                    // One Tap дав cancellation — запропонуємо fallback
-                                    useFallback = true
-                                    error = "One Tap не спрацював. Спробуйте класичний вхід ↓"
-                                } else {
-                                    error = err ?: "Вхід не вдався"
-                                }
-                            }
+                    if (loading || code.length != 6) return@Button
+                    loading = true; error = null
+                    onLogin(code) { ok ->
+                        loading = false
+                        if (!ok) {
+                            error = "Невірний або прострочений код. Перевірте та спробуйте ще раз."
+                            code = ""
                         }
                     }
                 },
-                enabled = !loading,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
+                enabled = !loading && code.length == 6,
+                modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFbf5af2)),
             ) {
                 if (loading) {
-                    CircularProgressIndicator(
-                        color = Color.White,
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
                 } else {
-                    Text(
-                        if (useFallback) "Спробувати класичний вхід" else "Увійти через Google",
-                        fontSize = 17.sp, fontWeight = FontWeight.SemiBold
-                    )
+                    Text("Увійти", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
+
             error?.let {
                 Spacer(Modifier.height(16.dp))
                 Text(it, color = Color(0xFFFF453A), fontSize = 13.sp, textAlign = TextAlign.Center)
             }
-            Spacer(Modifier.height(24.dp))
-            Text(
-                "Вхід безпарольний — оберіть Google-акаунт,\nякий вже додано на цьому пристрої",
-                color = Color(0xFF8a7fb5),
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center,
-                lineHeight = 18.sp,
-            )
+            Spacer(Modifier.height(32.dp))
+            Text("Код діє 5 хвилин.\nПотрібен Telegram на будь-якому пристрої.",
+                color = Color(0xFF8a7fb5), fontSize = 12.sp, textAlign = TextAlign.Center, lineHeight = 18.sp)
         }
     }
 
-    // Остання помилка входу (для показу користувачу деталей)
-    private var lastSignInError: String? = null
-
-    /** One Tap через Credential Manager з повтором при transient cancellation. */
-    private suspend fun signInWithGoogleOneTap(ctx: Context): String? {
-        lastSignInError = null
-        return withContext(Dispatchers.Main) {
-            repeat(2) { attempt ->
-                try {
-                    val credentialManager = CredentialManager.create(ctx)
-                    val googleIdOption = GetGoogleIdOption.Builder()
-                        .setFilterByAuthorizedAccounts(false)
-                        .setServerClientId(AppConfig.GOOGLE_WEB_CLIENT_ID)
-                        .setNonce(java.util.UUID.randomUUID().toString())
-                        .build()
-                    val request = GetCredentialRequest.Builder()
-                        .addCredentialOption(googleIdOption)
-                        .build()
-                    val result = credentialManager.getCredential(
-                        request = request,
-                        context = ctx as ComponentActivity,
-                    )
-                    val cred = result.credential
-                    if (cred is CustomCredential && cred.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                        return@withContext GoogleIdTokenCredential.createFrom(cred.data).idToken
-                    }
-                    lastSignInError = "Невідомий тип облікових даних: ${cred.type}"
-                    return@withContext null
-                } catch (e: GetCredentialCancellationException) {
-                    // На першій спробі cancellation часто буває хибною — повторимо
-                    if (attempt == 0) {
-                        kotlinx.coroutines.delay(300)
-                        return@repeat
-                    }
-                    lastSignInError = "Вхід скасовано"
-                    return@withContext null
-                } catch (e: GetCredentialInterruptedException) {
-                    if (attempt == 0) {
-                        kotlinx.coroutines.delay(300)
-                        return@repeat
-                    }
-                    lastSignInError = "Вхід перервано"
-                    return@withContext null
-                } catch (e: GetCredentialProviderConfigurationException) {
-                    lastSignInError = "Google Play Services недоступні"
-                    return@withContext null
-                } catch (e: NoCredentialException) {
-                    lastSignInError = "На пристрої немає Google-акаунтів"
-                    return@withContext null
-                } catch (e: Exception) {
-                    lastSignInError = "Помилка: ${e.message ?: e.javaClass.simpleName}"
-                    Log.e(TAG, "One Tap помилка", e)
-                    return@withContext null
+    /** Обмін bot-code на JWT через бекенд. */
+    private suspend fun exchangeCode(code: String): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = URL("${AppConfig.BASE_URL}/api/auth/exchange-code")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                val body = JSONObject().put("code", code).toString()
+                conn.outputStream.use { it.write(body.toByteArray()) }
+                if (conn.responseCode == 200) {
+                    val resp = conn.inputStream.bufferedReader().readText()
+                    JSONObject(resp).optString("token").takeIf { it.isNotEmpty() }
+                } else {
+                    Log.e(TAG, "exchange-code failed: ${conn.responseCode}")
+                    null
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "exchange-code error", e)
+                null
             }
-            null
         }
     }
-
+    /** One Tap через Credential Manager з повтором при transient cancellation. */
     // ── WebView з інжекцією JWT + нативний міст ──────────────────
     @SuppressLint("SetJavaScriptEnabled")
     @Composable
@@ -427,31 +325,7 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    // ── Мережа: обмін Google ID token на JWT ─────────────────────
-    private suspend fun exchangeGoogleLogin(idToken: String): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val url = URL("${AppConfig.BASE_URL}/api/auth/google")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.doOutput = true
-                val body = JSONObject().put("id_token", idToken).toString()
-                conn.outputStream.use { it.write(body.toByteArray()) }
-
-                if (conn.responseCode == 200) {
-                    val resp = conn.inputStream.bufferedReader().readText()
-                    JSONObject(resp).optString("token").takeIf { it.isNotEmpty() }
-                } else {
-                    Log.e(TAG, "google login failed: ${conn.responseCode}")
-                    null
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "google login error", e)
-                null
-            }
-        }
-    }
+    // ── Мережа: обмін bot-code на JWT ─────────────────────────────
 
     // ── Сховище JWT ──────────────────────────────────────────────
     private fun getSavedJwt(): String? {
