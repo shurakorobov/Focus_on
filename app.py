@@ -569,7 +569,7 @@ async def api_sounds(request: Request):
         {"id": "wind", "emoji": "🌬", "name": "Вітер", "premium": True},
         {"id": "white", "emoji": "🤍", "name": "White noise", "premium": True},
         {"id": "brown", "emoji": "🟤", "name": "Brown noise", "premium": True},
-        {"id": "library", "emoji": "📚", "name": "Бібліотека", "premium": True},
+        {"id": "clock", "emoji": "🕰️", "name": "Годинник", "premium": True},
         {"id": "soft-rain", "emoji": "🌦", "name": "Ніжний дощ", "premium": True},
         {"id": "thunder", "emoji": "⛈", "name": "Гроза", "premium": True},
         {"id": "stream", "emoji": "💧", "name": "Струмок", "premium": True},

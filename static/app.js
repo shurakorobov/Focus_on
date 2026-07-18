@@ -2660,7 +2660,7 @@
     { id: "wind", emoji: "🌬", name: "Вітер", url: "", premium: true },
     { id: "white", emoji: "🤍", name: "White noise", url: "", premium: true },
     { id: "brown", emoji: "🟤", name: "Brown noise", url: "", premium: true },
-    { id: "library", emoji: "📚", name: "Бібліотека", url: "", premium: true },
+    { id: "clock", emoji: "🕰️", name: "Годинник", url: "", premium: true },
     { id: "soft-rain", emoji: "🌦", name: "Ніжний дощ", url: "", premium: true },
     { id: "thunder", emoji: "⛈", name: "Гроза", url: "", premium: true },
     { id: "stream", emoji: "💧", name: "Струмок", url: "", premium: true },
