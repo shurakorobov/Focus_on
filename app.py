@@ -253,7 +253,12 @@ def current_user(request: Request) -> dict:
         if init_data:
             user = authenticate(init_data)
             if not user:
-                raise HTTPException(status_code=401, detail="invalid telegram auth")
+                # Невірний initData. У DEMO_MODE — fallback на demo user
+                # (вебапп може надсилати пошкоджений initData у деяких випадках).
+                if settings.DEMO_MODE:
+                    user = _demo_user()
+                else:
+                    raise HTTPException(status_code=401, detail="invalid telegram auth")
         elif settings.DEMO_MODE:
             # Демо-режим: анонімний доступ (тест/скріншоти з браузера).
             # Реальні користувачі завжди мають initData або JWT — сюди не доходять.
@@ -1116,7 +1121,11 @@ async def _handle_update(update: dict) -> None:
     command = command.split("@", 1)[0].lower()
     if command in ("/start", "/help", "/app"):
         start_param = command_payload.strip()[:64] if command == "/start" else ""
-        await _send_welcome(chat_id, start_param=start_param)
+        # /start login → одразу генеруємо код (без окремої команди)
+        if start_param == "login":
+            await _send_login_code(message)
+        else:
+            await _send_welcome(chat_id, start_param=start_param)
     elif command == "/login":
         await _send_login_code(message)
 
