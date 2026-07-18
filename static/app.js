@@ -619,10 +619,18 @@
 
   function startAdminSSE() {
     stopAdminSSE();
-    const initData = API.getInitData();
-    if (!initData) return;
+    // Auth для SSE: на Android використовуємо JWT (інжектований WebView-обгорткою),
+    // у Telegram Mini App — initData.
+    let authParam = "";
+    if (window.__JWT) {
+      authParam = "jwt=" + encodeURIComponent(window.__JWT);
+    } else {
+      const initData = API.getInitData();
+      if (!initData) return;
+      authParam = "init_data=" + encodeURIComponent(initData);
+    }
     // SSE через EventSource з auth у query (EventSource не підтримує заголовки)
-    const url = "/api/admin/stats/stream?init_data=" + encodeURIComponent(initData);
+    const url = "/api/admin/stats/stream?" + authParam;
     try {
       _adminSSE = new EventSource(url);
       // безіменні події (data:) = повна статистика

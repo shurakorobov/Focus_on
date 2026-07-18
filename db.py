@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -242,6 +243,25 @@ def migrate() -> None:
             "last_term", "last_gclid", "last_start_param", "last_open_at",
         ):
             _add_column(conn, "users", column, "TEXT NOT NULL DEFAULT ''")
+        # Google Sign-In (Android): паралельна ідентичність.
+        # tg_id залишається PK; для Google-юзерів генерується синтетичний
+        # негативний tg_id (позитивні — Telegram), щоб не переписувати
+        # усі 40+ функцій, що приймають tg_id.
+        _add_column(conn, "users", "google_id", "TEXT NOT NULL DEFAULT ''")
+        _add_column(conn, "users", "email", "TEXT NOT NULL DEFAULT ''")
+        _add_column(conn, "users", "name", "TEXT NOT NULL DEFAULT ''")
+        _add_column(conn, "users", "avatar_url", "TEXT NOT NULL DEFAULT ''")
+        # Унікальний індекс на google_id (partial — лише непорожні).
+        # Спрацює ідентично на SQLite та PostgreSQL.
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google "
+                "ON users(google_id) WHERE google_id != ''"
+            )
+        except Exception:
+            # Старий SQLite без partial index — fallback на звичайний,
+            # але тоді порожні рядки мають бути неунікальними, тож нічого не робимо.
+            pass
         # PostgreSQL: tg_id INTEGER → BIGINT (Telegram ID > 2.1 млрд)
         if _IS_PG:
             _pg_alter_to_bigint(conn)
@@ -497,6 +517,75 @@ def get_user(tg_id: int) -> dict | None:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,)).fetchone()
         return dict(row) if row else None
+
+
+def _synthetic_tg_id_for_google(google_id: str) -> int:
+    """Генерує стабільний негативний tg_id з Google sub (детерміновано).
+
+    Позитивні tg_id — Telegram; негативні — Google. Колізій нема (різні простори).
+    Модуль обмежений 2^31, щоб влізти у INTEGER навіть без BIGINT.
+    """
+    h = hashlib.sha256(google_id.encode()).hexdigest()
+    return -(int(h[:12], 16) % (2**31))
+
+
+def upsert_user_google(
+    google_id: str,
+    email: str = "",
+    name: str = "",
+    avatar_url: str = "",
+) -> dict:
+    """Створює або оновлює Google-юзера. Повертає рядок у форматі як для Telegram.
+
+    Пошук за google_id (унікальний). Якщо нема — генеруємо синтетичний
+    негативний tg_id і створюємо рядок. Якщо є — оновлюємо email/name/avatar.
+    Повертає словник з полями: id, tg_id, first_name, last_name, username,
+    photo_url, email (сумісний з create_token).
+    """
+    if not google_id:
+        raise ValueError("google_id is required")
+    now = datetime.now(timezone.utc).isoformat()
+    synthetic_tg = _synthetic_tg_id_for_google(google_id)
+    # first_name для JWT/profile беремо з display name Google
+    display = (name or email or "Google user").strip()
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT * FROM users WHERE google_id = ?", (google_id,)
+        ).fetchone()
+        if existing:
+            row = dict(existing)
+            conn.execute(
+                """UPDATE users SET
+                       email = ?, name = ?, avatar_url = ?, first_name = ?
+                   WHERE google_id = ?""",
+                (email, name, avatar_url, display, google_id),
+            )
+            row.update({"email": email, "name": name, "avatar_url": avatar_url,
+                        "first_name": display})
+            user = row
+        else:
+            conn.execute(
+                """INSERT INTO users
+                   (tg_id, first_name, last_name, username, photo_url,
+                    google_id, email, name, avatar_url, created_at)
+                   VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?)""",
+                (synthetic_tg, display, avatar_url or "",
+                 google_id, email, name, avatar_url, now),
+            )
+            user = {
+                "tg_id": synthetic_tg,
+                "id": synthetic_tg,
+                "first_name": display,
+                "last_name": "",
+                "username": "",
+                "photo_url": avatar_url or "",
+                "google_id": google_id,
+                "email": email,
+                "name": name,
+                "avatar_url": avatar_url,
+            }
+    _notify_changed()
+    return user
 
 
 # -------------------------- маркетингова атрибуція ---------------------------

@@ -66,4 +66,9 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     // Google Play Billing: підписки premium
     implementation(libs.billing.ktx)
+    // Google Sign-In (One Tap через Credential Manager)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.googleid)
+    implementation(libs.play.services.auth)
 }

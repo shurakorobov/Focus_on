@@ -3,7 +3,6 @@ package com.focuson.app
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -25,23 +24,29 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 
 // ── Конфігурація ──────────────────────────────────────────────
 // Для тесту на емуляторі: 10.0.2.2 = хост-машина (твій локальний сервер)
 // Для релізу: замінити на Render URL, напр. https://focus-on.onrender.com
 object AppConfig {
     const val BASE_URL = "https://focus-on.onrender.com"
-    // Telegram bot username для Login Widget (без @)
-    const val BOT_USERNAME = "focuson_on_bot"
     // SKU місячної підписки premium у Google Play Console
     const val PREMIUM_SKU = "focus_on_premium_month"
+    // Google OAuth Web Client ID (з Google Cloud Console).
+    // Це Web Client ID, не Android — бо верифікація ID-токена на бекенді перевіряє
+    // audience проти цього ID. Отримати: console.cloud.google.com → APIs & Services → Credentials.
+    const val GOOGLE_WEB_CLIENT_ID = "PASTE_YOUR_WEB_CLIENT_ID.apps.googleusercontent.com"
 }
 
 class MainActivity : ComponentActivity() {
@@ -51,9 +56,6 @@ class MainActivity : ComponentActivity() {
         private const val PREFS = "focus_auth"
         private const val KEY_JWT = "jwt_token"
     }
-
-    // Колбек від Telegram Login (через deep link / intent)
-    private var onLoginResult: ((String) -> Unit)? = null
 
     // BillingClient менеджер (створюється при FocusWebView init)
     private var billingManager: BillingManager? = null
@@ -68,13 +70,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        // Обробка deep link / intent від браузера після логіну
-        handleIntent(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleIntent(intent)
     }
 
     override fun onStart() {
@@ -88,23 +83,10 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun handleIntent(intent: Intent?) {
-        val data = intent?.data ?: return
-        // Telegram Login повертає auth_data як query parameter
-        data.getQueryParameter("auth_data")?.let { authData ->
-            onLoginResult?.invoke(authData)
-        }
-    }
-
     @Composable
     private fun AppContent() {
         var jwt by remember { mutableStateOf(getSavedJwt()) }
-
-        // Колбек з LoginScreen (через NativeBridge.onLogin з WebView)
-        onLoginResult = { token ->
-            saveJwt(token)
-            jwt = token
-        }
+        val scope = rememberCoroutineScope()
 
         if (jwt != null) {
             FocusWebView(jwt = jwt!!, onLogout = {
@@ -112,35 +94,124 @@ class MainActivity : ComponentActivity() {
                 jwt = null
             })
         } else {
-            LoginScreen()
+            LoginScreen(onLogin = { idToken ->
+                scope.launch {
+                    val token = exchangeGoogleLogin(idToken)
+                    if (token != null) {
+                        saveJwt(token)
+                        jwt = token
+                    }
+                }
+            })
         }
     }
 
-    // ── Екран входу ──────────────────────────────────────────────
-    // WebView зі сторінкою /android-login. Telegram Login Widget відпрацює
-    // всередині WebView і передасть JWT через AndroidNative.onLogin(token).
-    @SuppressLint("SetJavaScriptEnabled")
+    // ── Екран входу (Google Sign-In через Credential Manager) ─────
     @Composable
-    private fun LoginScreen() {
-        AndroidView(
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    webViewClient = WebViewClient()
-                    webChromeClient = WebChromeClient()
-                    // Міст: сторінка /android-login викличе AndroidNative.onLogin(token)
-                    addJavascriptInterface(object {
-                        @JavascriptInterface
-                        fun onLogin(token: String) {
-                            runOnUiThread { onLoginResult?.invoke(token) }
+    private fun LoginScreen(onLogin: (idToken: String) -> Unit) {
+        val ctx = LocalContext.current
+        val scope = rememberCoroutineScope()
+        var loading by remember { mutableStateOf(false) }
+        var error by remember { mutableStateOf<String?>(null) }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                "🎯 Focus ON",
+                color = Color(0xFFbf5af2),
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Таймер глибокої концентрації\nз музикою та звуками",
+                color = Color(0xFFd2c8ff),
+                fontSize = 15.sp,
+                textAlign = TextAlign.Center,
+                lineHeight = 22.sp,
+            )
+            Spacer(Modifier.height(48.dp))
+            Button(
+                onClick = {
+                    if (loading) return@Button
+                    loading = true
+                    error = null
+                    scope.launch {
+                        val idToken = signInWithGoogle(ctx)
+                        if (idToken != null) {
+                            onLogin(idToken)
+                        } else {
+                            loading = false
+                            error = "Не вдалося увійти. Перевірте підключення до інтернету."
                         }
-                    }, "AndroidNative")
-                    loadUrl("${AppConfig.BASE_URL}/android-login")
+                    }
+                },
+                enabled = !loading,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFbf5af2)),
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(24.dp)
+                    )
+                } else {
+                    Text("Увійти через Google", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
+            }
+            error?.let {
+                Spacer(Modifier.height(16.dp))
+                Text(it, color = Color(0xFFFF453A), fontSize = 13.sp, textAlign = TextAlign.Center)
+            }
+            Spacer(Modifier.height(24.dp))
+            Text(
+                "Вхід безпарольний — оберіть Google-акаунт,\nякий вже додано на цьому пристрої",
+                color = Color(0xFF8a7fb5),
+                fontSize = 12.sp,
+                textAlign = TextAlign.Center,
+                lineHeight = 18.sp,
+            )
+        }
+    }
+
+    /** Запускає Google Sign-In через Credential Manager (One Tap).
+     *  Повертає idToken або null. */
+    private suspend fun signInWithGoogle(ctx: Context): String? {
+        return withContext(Dispatchers.Main) {
+            try {
+                val credentialManager = CredentialManager.create(ctx)
+                val googleIdOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(false)
+                    .setServerClientId(AppConfig.GOOGLE_WEB_CLIENT_ID)
+                    .build()
+                val request = GetCredentialRequest.Builder()
+                    .addCredentialOption(googleIdOption)
+                    .build()
+                val result = credentialManager.getCredential(
+                    request = request,
+                    context = ctx as ComponentActivity,
+                )
+                val cred = result.credential
+                if (cred is CustomCredential && cred.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    GoogleIdTokenCredential.createFrom(cred.data).idToken
+                } else {
+                    Log.w(TAG, "Невідомий тип credential: ${cred.type}")
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Google Sign-In помилка", e)
+                null
+            }
+        }
     }
 
     // ── WebView з інжекцією JWT + нативний міст ──────────────────
@@ -246,27 +317,27 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    // ── Мережа: обмін Telegram payload на JWT ────────────────────
-    private suspend fun exchangeTelegramLogin(authData: String): String? {
+    // ── Мережа: обмін Google ID token на JWT ─────────────────────
+    private suspend fun exchangeGoogleLogin(idToken: String): String? {
         return withContext(Dispatchers.IO) {
             try {
-                val url = URL("${AppConfig.BASE_URL}/api/auth/telegram-login")
+                val url = URL("${AppConfig.BASE_URL}/api/auth/google")
                 val conn = url.openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.doOutput = true
-                val body = JSONObject().put("auth_data", authData).toString()
+                val body = JSONObject().put("id_token", idToken).toString()
                 conn.outputStream.use { it.write(body.toByteArray()) }
 
                 if (conn.responseCode == 200) {
                     val resp = conn.inputStream.bufferedReader().readText()
                     JSONObject(resp).optString("token").takeIf { it.isNotEmpty() }
                 } else {
-                    Log.e(TAG, "login failed: ${conn.responseCode}")
+                    Log.e(TAG, "google login failed: ${conn.responseCode}")
                     null
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "login error", e)
+                Log.e(TAG, "google login error", e)
                 null
             }
         }
@@ -280,10 +351,6 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
         if (token != null) prefs.putString(KEY_JWT, token) else prefs.remove(KEY_JWT)
         prefs.apply()
-    }
-
-    private fun getBotId(): String {
-        return "8922920802"
     }
 }
 

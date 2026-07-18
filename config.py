@@ -98,8 +98,24 @@ class Settings:
         """Telegram Stars доступні, коли є BOT_TOKEN (бо це нативні платежі TG)."""
         return bool(self.BOT_TOKEN)
 
-    def is_admin(self, tg_id: int) -> bool:
-        return tg_id in self.ADMIN_IDS
+    # Google Sign-In (Android): список email-ів, які є адмінами.
+    # Окремо від ADMIN_IDS (Telegram tg_id), бо Google-юзери не мають tg_id.
+    ADMIN_GOOGLE_EMAILS: tuple[str, ...] = tuple(
+        e.strip().lower()
+        for e in os.getenv("ADMIN_GOOGLE_EMAILS", "").replace(" ", ",").split(",")
+        if e.strip() and "@" in e
+    )
+    # Web Client ID OAuth-клієнта Google (з Google Cloud Console).
+    # Потрібен для верифікації audience ID-токена на бекенді.
+    GOOGLE_OAUTH_CLIENT_ID: str = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+
+    def is_admin(self, tg_id: int = 0, email: str = "") -> bool:
+        """Адмін за tg_id (Telegram) АБО за email (Google Sign-In)."""
+        if tg_id and tg_id in self.ADMIN_IDS:
+            return True
+        if email and email.strip().lower() in self.ADMIN_GOOGLE_EMAILS:
+            return True
+        return False
 
 
 settings = Settings()

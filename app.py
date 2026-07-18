@@ -206,35 +206,64 @@ def current_user(request: Request) -> dict:
       1. Telegram WebApp initData (Mini App) — заголовок Bearer <initData>,
          query ?init_data= або поле init_data у тілі.
       2. JWT-токен (Android-клієнт) — заголовок Bearer <jwt> після входу
-         через /api/auth/telegram-login.
+         через /api/auth/telegram-login або /api/auth/google (Google Sign-In).
     """
     auth = request.headers.get("authorization", "")
     token = ""
     if auth.lower().startswith("bearer "):
         token = auth[7:].strip()
 
+    user = None
     # спершу пробуємо JWT (формат: три частини через крапку)
     if token and token.count(".") == 2:
         user = verify_token(token)
-        if user:
-            return user
-        raise HTTPException(status_code=401, detail="invalid jwt")
+        if not user:
+            raise HTTPException(status_code=401, detail="invalid jwt")
+    else:
+        # інакше — Telegram initData
+        init_data = token
+        if not init_data and "init_data" in request.query_params:
+            init_data = request.query_params["init_data"]
+        if not init_data:
+            try:
+                body = request.scope.get("_body_json") or {}
+            except Exception:
+                body = {}
+            init_data = body.get("init_data", "") if isinstance(body, dict) else ""
+        user = authenticate(init_data)
+        if not user:
+            raise HTTPException(status_code=401, detail="invalid telegram auth")
 
-    # інакше — Telegram initData
-    init_data = token
-    if not init_data and "init_data" in request.query_params:
-        init_data = request.query_params["init_data"]
-    if not init_data:
-        try:
-            body = request.scope.get("_body_json") or {}
-        except Exception:
-            body = {}
-        init_data = body.get("init_data", "") if isinstance(body, dict) else ""
-
-    user = authenticate(init_data)
-    if not user:
-        raise HTTPException(status_code=401, detail="invalid telegram auth")
+    # Доповнюємо профільними даними з БД (email, avatar_url — для Google-юзерів),
+    # щоб перевірки admin/premium мали повний контекст.
+    row = db.get_user(user.get("id") or user.get("tg_id") or 0)
+    if row:
+        user["email"] = row.get("email", "") or ""
+        user["avatar_url"] = row.get("avatar_url", "") or ""
+        user["google_id"] = row.get("google_id", "") or ""
+    else:
+        user.setdefault("email", "")
+        user.setdefault("avatar_url", "")
+        user.setdefault("google_id", "")
     return user
+
+
+def _authenticate_token(token: str) -> dict | None:
+    """Універсальна авторизація для endpoint-ів без Depends (напр. SSE):
+    приймає і JWT (з крапками), і initData. Повертає user-словник або None."""
+    if not token:
+        return None
+    if token.count(".") == 2:
+        u = verify_token(token)
+    else:
+        u = authenticate(token)
+    if not u:
+        return None
+    row = db.get_user(u.get("id") or u.get("tg_id") or 0)
+    if row:
+        u["email"] = row.get("email", "") or ""
+        u["avatar_url"] = row.get("avatar_url", "") or ""
+    return u
 
 
 def _ensure_user_exists(user: dict) -> None:
@@ -390,6 +419,70 @@ async def api_telegram_login(payload: TelegramLoginReq):
     return {"ok": True, "token": token, "user": user}
 
 
+class GoogleAuthReq(BaseModel):
+    """ID-токен Google Sign-In від Android Credential Manager."""
+    id_token: str = Field(..., min_length=10)
+
+
+async def _verify_google_id_token(id_token: str) -> dict | None:
+    """Верифікує Google ID token через tokeninfo endpoint (без нових залежностей).
+
+    Перевіряє audience (aud) проти settings.GOOGLE_OAUTH_CLIENT_ID, щоб
+    чужі токени (видані іншим клієнтам) не приймались.
+    Повертає {sub, email, email_verified, name, picture} або None.
+    """
+    if not settings.GOOGLE_OAUTH_CLIENT_ID:
+        logging.getLogger("google_auth").warning(
+            "GOOGLE_OAUTH_CLIENT_ID не налаштований — Google вхід вимкнений"
+        )
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": id_token},
+            )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+    except Exception:
+        return None
+    # audience має бути наш Web Client ID
+    if data.get("aud") != settings.GOOGLE_OAUTH_CLIENT_ID:
+        return None
+    # email має бути верифікований
+    if str(data.get("email_verified", "")).lower() != "true":
+        return None
+    if not data.get("sub") or not data.get("email"):
+        return None
+    return {
+        "sub": data["sub"],
+        "email": data["email"],
+        "name": data.get("name", ""),
+        "picture": data.get("picture", ""),
+    }
+
+
+@app.post("/api/auth/google")
+async def api_google_login(payload: GoogleAuthReq):
+    """Обмін Google ID token на наш JWT (Android Google Sign-In).
+
+    Верифікує токен через Google tokeninfo, створює/оновлює Google-юзера
+    в БД (синтетичний негативний tg_id), повертає JWT.
+    """
+    verified = await _verify_google_id_token(payload.id_token)
+    if not verified:
+        raise HTTPException(status_code=401, detail="invalid google token")
+    user = db.upsert_user_google(
+        google_id=verified["sub"],
+        email=verified["email"],
+        name=verified["name"],
+        avatar_url=verified["picture"],
+    )
+    token = create_token(user)
+    return {"ok": True, "token": token, "user": user}
+
+
 @app.post("/api/attribution/click")
 async def api_attribution_click(payload: AttributionClickReq):
     """Створює короткий токен для переходу landing → Telegram.
@@ -464,7 +557,7 @@ async def api_me(request: Request, user: dict = Depends(current_user)):
         "is_premium": plan["is_premium"],
         "plan_expires_at": plan["plan_expires_at"],
         "recommendations": recommendations,
-        "is_admin": settings.is_admin(user["id"]),
+        "is_admin": settings.is_admin(tg_id=user["id"], email=user.get("email","")),
         "premium_price_stars": settings.PREMIUM_PRICE_STARS,
         "version": settings.APP_VERSION,
         "network": geo,
@@ -644,7 +737,7 @@ async def api_list_tracks(
             t["embed_url"] = storage.apple_music_embed_url(t["url"])
         elif base and t["url"].startswith("/"):
             t["url"] = base + t["url"]
-    is_admin = settings.is_admin(user["id"])
+    is_admin = settings.is_admin(tg_id=user["id"], email=user.get("email",""))
     upload_count = db.get_upload_count(user["id"])
     return {
         "demo": [],
@@ -665,7 +758,7 @@ async def api_add_track_url(
     _ensure_user_exists(user)
     scope = payload.scope
     # demo/admin — лише адмін
-    if scope in ("demo", "admin") and not settings.is_admin(user["id"]):
+    if scope in ("demo", "admin") and not settings.is_admin(tg_id=user["id"], email=user.get("email","")):
         raise HTTPException(status_code=403, detail="admin only")
     # ліміт для безкоштовних
     if scope == "user" and not db.is_premium(user["id"]):
@@ -723,7 +816,7 @@ async def api_upload_track(
 ):
     """Завантажує файл музики у Supabase Storage."""
     _ensure_user_exists(user)
-    if scope == "admin" and not settings.is_admin(user["id"]):
+    if scope == "admin" and not settings.is_admin(tg_id=user["id"], email=user.get("email","")):
         raise HTTPException(status_code=403, detail="admin only")
     if scope == "user" and not db.is_premium(user["id"]):
         used = db.get_upload_count(user["id"])
@@ -774,7 +867,7 @@ async def api_delete_track(
     track_id: int, user: dict = Depends(current_user)
 ):
     """Видаляє трек. Адмін — будь-який; користувач — лише свій особистий."""
-    is_admin = settings.is_admin(user["id"])
+    is_admin = settings.is_admin(tg_id=user["id"], email=user.get("email",""))
     ok = db.delete_track(user["id"], track_id, is_admin)
     if not ok:
         raise HTTPException(status_code=404, detail="не знайдено або немає доступу")
@@ -788,7 +881,7 @@ async def api_rename_track(
     user: dict = Depends(current_user),
 ):
     """Перейменовує трек. Адмін — будь-який; користувач — лише свій особистий."""
-    is_admin = settings.is_admin(user["id"])
+    is_admin = settings.is_admin(tg_id=user["id"], email=user.get("email",""))
     ok = db.rename_track(user["id"], track_id, payload.title, is_admin)
     if not ok:
         raise HTTPException(status_code=404, detail="не знайдено або немає доступу")
@@ -1027,7 +1120,7 @@ async def api_grant_premium(
     payload: GrantPremium, user: dict = Depends(current_user)
 ):
     """Ручне вмикання преміуму (тільки адмін)."""
-    if not settings.is_admin(user["id"]):
+    if not settings.is_admin(tg_id=user["id"], email=user.get("email","")):
         raise HTTPException(status_code=403, detail="admin only")
     expires = db.set_user_plan(payload.tg_id, "premium", days=payload.days)
     return {"ok": True, "tg_id": payload.tg_id, "plan": "premium", "plan_expires_at": expires}
@@ -1108,7 +1201,7 @@ async def api_play_verify(payload: PlayVerify, user: dict = Depends(current_user
 @app.get("/api/admin/promo-codes")
 async def api_list_promo(user: dict = Depends(current_user)):
     """Список промокодів (тільки адмін)."""
-    if not settings.is_admin(user["id"]):
+    if not settings.is_admin(tg_id=user["id"], email=user.get("email","")):
         raise HTTPException(status_code=403, detail="admin only")
     return {"codes": db.list_promo_codes()}
 
@@ -1116,7 +1209,7 @@ async def api_list_promo(user: dict = Depends(current_user)):
 @app.post("/api/admin/promo-codes")
 async def api_create_promo(payload: PromoCodeReq, user: dict = Depends(current_user)):
     """Створити промокод (тільки адмін)."""
-    if not settings.is_admin(user["id"]):
+    if not settings.is_admin(tg_id=user["id"], email=user.get("email","")):
         raise HTTPException(status_code=403, detail="admin only")
     result = db.add_promo_code(payload.code, payload.days, payload.max_uses, user["id"])
     return result
@@ -1125,7 +1218,7 @@ async def api_create_promo(payload: PromoCodeReq, user: dict = Depends(current_u
 @app.delete("/api/admin/promo-codes/{code}")
 async def api_delete_promo(code: str, user: dict = Depends(current_user)):
     """Видалити промокод (тільки адмін)."""
-    if not settings.is_admin(user["id"]):
+    if not settings.is_admin(tg_id=user["id"], email=user.get("email","")):
         raise HTTPException(status_code=403, detail="admin only")
     ok = db.delete_promo_code(code)
     return {"ok": ok}
@@ -1134,7 +1227,7 @@ async def api_delete_promo(code: str, user: dict = Depends(current_user)):
 @app.get("/api/admin/stats")
 async def api_admin_stats(user: dict = Depends(current_user)):
     """Повна статистика використання застосунку (тільки адмін)."""
-    if not settings.is_admin(user["id"]):
+    if not settings.is_admin(tg_id=user["id"], email=user.get("email","")):
         raise HTTPException(status_code=403, detail="admin only")
     stats = db.get_admin_stats()
     stats["online"] = {"count": online_count(), "users": online_users()}
@@ -1144,10 +1237,12 @@ async def api_admin_stats(user: dict = Depends(current_user)):
 @app.get("/api/admin/stats/stream")
 async def api_admin_stats_stream(request: Request):
     """SSE stream — real-time оновлення адмін-статистики.
-    Auth через query param init_data (EventSource не підтримує заголовки)."""
-    init_data = request.query_params.get("init_data", "")
-    user = authenticate(init_data)
-    if not user or not settings.is_admin(user["id"]):
+    Auth через query param: ?jwt=<JWT> (Android/Google) або ?init_data=<initData> (Telegram Mini App).
+    EventSource не підтримує заголовки, тому токен у query."""
+    # Приймаємо і JWT (Android Google Sign-In), і initData (Telegram Mini App)
+    token = request.query_params.get("jwt", "") or request.query_params.get("init_data", "")
+    user = _authenticate_token(token)
+    if not user or not settings.is_admin(tg_id=user.get("id", 0), email=user.get("email", "")):
         raise HTTPException(status_code=403, detail="admin only")
 
     from fastapi.encoders import jsonable_encoder
