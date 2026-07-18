@@ -1049,10 +1049,54 @@ def get_stats_premium(tg_id: int, range_key: str = "month", category: str | None
         # серія (streak) — спільна логіка з безкоштовним шляхом
         streak, best_streak = _compute_streak(conn, tg_id)
 
+        # Heatmap: останні 84 дні (12 тижнів) із сумою секунд по днях.
+        # Будується з by_day (він без фільтра періоду — береться повний за часом, але
+        # ми переробляємо з окремим запитом за 84 дні для стабільності).
+        heat_start = (datetime.now(timezone.utc) - timedelta(days=83)).date()
+        heat_rows = conn.execute(
+            """
+            SELECT date(finished_at) AS d, COALESCE(SUM(actual), 0) AS s
+            FROM sessions
+            WHERE tg_id = ? AND completed = 1 AND date(finished_at) >= ?
+            GROUP BY d
+            """,
+            (tg_id, heat_start.isoformat()),
+        ).fetchall()
+        heat_map = {str(r["d"]): int(r["s"]) for r in heat_rows}
+        # заповнюємо 84 дні з кінця
+        heatmap = []
+        for i in range(83, -1, -1):
+            d = (datetime.now(timezone.utc) - timedelta(days=i)).date().isoformat()
+            heatmap.append({"date": d, "seconds": heat_map.get(d, 0)})
+
+        # Trend: загал за поточний період vs попередній період тієї ж тривалості.
+        prev_total = 0
+        if start is not None:
+            dur = datetime.now(timezone.utc) - start
+            prev_end = start
+            prev_start = start - dur
+            prev_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(actual),0) AS s
+                FROM sessions
+                WHERE tg_id = ? AND completed = 1
+                  AND finished_at >= ? AND finished_at < ?
+                """,
+                (tg_id, prev_start.isoformat(), prev_end.isoformat()),
+            ).fetchone()
+            prev_total = int(prev_row["s"]) if prev_row else 0
+        cur_total = int(total_row["s"])
+        if prev_total > 0:
+            change_pct = round(((cur_total - prev_total) / prev_total) * 100)
+        elif cur_total > 0:
+            change_pct = 100  # минулий період пустий → фіксований плюс
+        else:
+            change_pct = 0
+
     return {
         "range": range_key,
         "category": category,
-        "total_seconds": int(total_row["s"]),
+        "total_seconds": cur_total,
         "total_sessions": int(total_row["c"]),
         "by_category": [dict(r) for r in by_category],
         "by_day": [dict(r) for r in by_day],
@@ -1061,6 +1105,10 @@ def get_stats_premium(tg_id: int, range_key: str = "month", category: str | None
         "best_streak": best_streak,
         "categories": CATEGORIES,
         "modes": FOCUS_MODES,
+        # нові поля
+        "heatmap": heatmap,            # [{date, seconds}, ...] довжина 84
+        "prev_total_seconds": prev_total,
+        "change_pct": change_pct,      # динаміка vs попередній період (%)
     }
 
 

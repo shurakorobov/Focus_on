@@ -5,23 +5,33 @@
 
   const tg = window.Telegram && window.Telegram.WebApp;
 
-  // ---------- Тема (світла/темна) ----------
+  // ---------- Тема (темна/світла + premium: oled/ocean/forest) ----------
+  // Кольори фону для синхронізації з Telegram WebApp SDK (header/bg/bottomBar).
+  const THEME_COLORS = {
+    dark:   { bg: "#07030f", bottom: "#160c2a", ico: "🌙" },
+    light:  { bg: "#f5f0fa", bottom: "#f5f0fa", ico: "☀️" },
+    oled:   { bg: "#000000", bottom: "#0a0a0a", ico: "⬛" },
+    ocean:  { bg: "#001a2e", bottom: "#002744", ico: "🌊" },
+    forest: { bg: "#0d1f0d", bottom: "#15301a", ico: "🌲" },
+  };
+  const PREMIUM_THEMES = ["oled", "ocean", "forest"];
+
   function getStoredTheme() {
     try { return localStorage.getItem("focus-theme") || "dark"; } catch (e) { return "dark"; }
   }
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
-    const bg = theme === "light" ? "#f5f0fa" : "#07030f";
-    const bottomBar = theme === "light" ? "#f5f0fa" : "#160c2a";
+    const c = THEME_COLORS[theme] || THEME_COLORS.dark;
     if (tg) {
-      if (tg.setHeaderColor) tg.setHeaderColor(bg);
-      if (tg.setBackgroundColor) tg.setBackgroundColor(bg);
-      if (tg.setBottomBarColor) tg.setBottomBarColor(bottomBar);
+      if (tg.setHeaderColor) tg.setHeaderColor(c.bg);
+      if (tg.setBackgroundColor) tg.setBackgroundColor(c.bg);
+      if (tg.setBottomBarColor) tg.setBottomBarColor(c.bottom);
     }
     const ico = document.querySelector("#btn-theme-toggle .action-ico");
-    if (ico) ico.textContent = theme === "light" ? "☀️" : "🌙";
+    if (ico) ico.textContent = c.ico;
   }
   function toggleTheme() {
+    // швидке перемикання dark↔light (без відкриття picker)
     const cur = getStoredTheme();
     const next = cur === "dark" ? "light" : "dark";
     try { localStorage.setItem("focus-theme", next); } catch (e) {}
@@ -29,12 +39,78 @@
     haptic("light");
   }
 
+  // Перевірка: чи тема premium і чи юзер має підписку
+  function canUseTheme(theme) {
+    if (!PREMIUM_THEMES.includes(theme)) return true;
+    return !!state.isPremium;
+  }
+
+  // При старті — якщо збережена premium-тема але юзер не premium → fallback на dark
+  function initThemeGuard() {
+    const t = getStoredTheme();
+    if (!canUseTheme(t)) {
+      try { localStorage.setItem("focus-theme", "dark"); } catch (e) {}
+      applyTheme("dark");
+      toast("Premium-тема недоступна. Оформіть підписку.");
+    } else {
+      applyTheme(t);
+    }
+  }
+
+  // Picker тем (5 варіантів). Free: dark, light. Premium: oled, ocean, forest.
+  function openThemePicker() {
+    const themes = [
+      { id: "dark",   emoji: "🌙", name: "Темна",       premium: false },
+      { id: "light",  emoji: "☀️", name: "Світла",      premium: false },
+      { id: "oled",   emoji: "⬛", name: "AMOLED",      premium: true },
+      { id: "ocean",  emoji: "🌊", name: "Океан",       premium: true },
+      { id: "forest", emoji: "🌲", name: "Ліс",         premium: true },
+    ];
+    const cur = getStoredTheme();
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    let inner = '<div class="sheet" style="text-align:center;">' +
+      '<div class="sheet-handle"></div>' +
+      '<h3 style="margin:0 0 16px;">Тема оформлення</h3>';
+    themes.forEach((t) => {
+      const locked = t.premium && !state.isPremium;
+      const activeCls = cur === t.id ? " active" : "";
+      const lockSuffix = locked ? " 🔒" : (cur === t.id ? " ✓" : "");
+      inner += '<button class="action-row' + activeCls + '" data-theme="' + t.id + '" style="justify-content:space-between;">' +
+        '<span>' + t.emoji + ' ' + t.name + '</span>' +
+        '<span style="opacity:0.6;font-size:13px;">' + (locked ? "Premium" : "") + lockSuffix + '</span>' +
+        '</button>';
+    });
+    inner += '<div class="sheet-divider"></div>' +
+      '<button class="action-row cancel" data-theme="">Скасувати</button>' +
+      '</div>';
+    overlay.innerHTML = inner;
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll("button[data-theme]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const themeId = btn.dataset.theme;
+        overlay.remove();
+        if (!themeId) return; // Скасувати
+        const meta = themes.find((t) => t.id === themeId);
+        if (meta.premium && !state.isPremium) {
+          openSubscribe();
+          return;
+        }
+        try { localStorage.setItem("focus-theme", themeId); } catch (e) {}
+        applyTheme(themeId);
+        haptic("light");
+        toast("Тема: " + meta.name);
+      });
+    });
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  }
+
   if (tg) {
     tg.ready();
     tg.expand();
   }
   // тема до ініціалізації решти
-  applyTheme(getStoredTheme());
+  applyTheme(getStoredTheme()); // базове застосування одразу (initThemeGuard догінить після loadProfile)
 
   // ── Слухач повідомлень від Android foreground service ────────
   // У Android WebView (iframe) Kotlin шле postMessage через батьківське вікно.
@@ -1121,21 +1197,25 @@
 
   function renderPaywall(price) {
     const features = [
-      "📊 Статистика за категоріями діяльності",
-      "📈 Графіки прогресу за тиждень/місяць/рік",
-      "🔥 Серії (streaks) та щоденні цілі",
+      "📊 Розширена статистика: графіки, heatmap, динаміка періодів",
+      "🎵 12+ премиум-звуків: гроза, піаніно, співаючі чаші, ніжний дощ…",
+      "🎨 3 премиум-теми оформлення: AMOLED, Океан, Ліс",
       "🗂 Повна історія сесій (без обмеження)",
-      "🎵 Безлімітні завантаження треків",
+      "🔥 Безлімітні цілі та серії",
     ];
+    // кнопка: на Android — «Premium», на Telegram — ціна в Stars
+    const btnText = isNativeBridge()
+      ? "Розблокувати Premium"
+      : "Розблокувати — " + price + "⭐/міс";
     return (
       '<div class="paywall">' +
         '<div class="paywall-lock">🔒</div>' +
         '<h3>Premium</h3>' +
-        '<p class="paywall-sub">Детальна статистика та розширені можливості</p>' +
+        '<p class="paywall-sub">Розширені звуки, теми та детальна статистика</p>' +
         '<ul class="paywall-list">' +
           features.map((f) => '<li>' + f + '</li>').join("") +
         '</ul>' +
-        '<button class="primary-btn" id="paywall-btn">Розблокувати — ' + price + '⭐/міс</button>' +
+        '<button class="primary-btn" id="paywall-btn">' + btnText + '</button>' +
       '</div>'
     );
   }
@@ -1155,6 +1235,16 @@
       html += '<div class="streak-card"><div class="stat-value">' + human(d.total_seconds) + '</div><div class="stat-label">за період</div></div>';
       html += '</div>';
 
+      // Trend: динаміка vs попередній період
+      if (typeof d.change_pct === "number") {
+        const up = d.change_pct > 0;
+        const flat = d.change_pct === 0;
+        const cls = flat ? "flat" : (up ? "up" : "down");
+        const arrow = flat ? "→" : (up ? "📈" : "📉");
+        const sign = up ? "+" : "";
+        html += '<div class="trend-badge ' + cls + '">' + arrow + ' ' + sign + d.change_pct + '% порівняно з попереднім періодом</div>';
+      }
+
       // графік по днях
       if (d.by_day && d.by_day.length) {
         const maxSec = Math.max(...d.by_day.map((x) => x.s), 1);
@@ -1167,6 +1257,27 @@
           html += '<div class="chart-col"><div class="chart-bar" style="height:' + Math.max(pct, 3) + '%"></div><span class="chart-lbl">' + dateLbl + '</span></div>';
         });
         html += '</div>';
+      }
+
+      // Heatmap активності (84 дні, 12 тижнів) — як GitHub contribution graph
+      if (d.heatmap && d.heatmap.length) {
+        const maxSec = Math.max(...d.heatmap.map((x) => x.seconds), 1);
+        html += '<h2 class="group-title">Карта активності (12 тижнів)</h2><div class="heatmap">';
+        d.heatmap.forEach((cell) => {
+          const s = cell.seconds;
+          // 4 рівні: 0=порожньо, 1-4 за інтенсивністю
+          let level = 0;
+          if (s > 0) {
+            const ratio = s / maxSec;
+            level = ratio > 0.75 ? 4 : ratio > 0.5 ? 3 : ratio > 0.25 ? 2 : 1;
+          }
+          const title = cell.date + ": " + (s > 0 ? human(s) : "нема сесій");
+          html += '<div class="heatmap-cell lv' + level + '" title="' + title + '"></div>';
+        });
+        html += '</div>';
+        html += '<div class="heatmap-legend"><span>менше</span>' +
+          [0,1,2,3,4].map((l) => '<div class="heatmap-cell lv' + l + '"></div>').join("") +
+          '<span>більше</span></div>';
       }
 
       // за категоріями
@@ -2084,8 +2195,8 @@
       $("#bug-modal").classList.remove("hidden");
       $("#bug-message").focus();
     });
-    // тема — перемикач світла/темна
-    $("#btn-theme-toggle").addEventListener("click", toggleTheme);
+    // тема — picker з 5 варіантами (dark/light free + oled/ocean/forest premium)
+    $("#btn-theme-toggle").addEventListener("click", openThemePicker);
     // підтримка — з'єднання з адміністратором
     $("#btn-support").addEventListener("click", () => {
       const url = "https://t.me/shurakorobov";
@@ -2539,14 +2650,24 @@
   // ---------- Звуки (ambient mixer, Web Audio) ----------
   // Канали: url/emoji/name завантажуються з /api/sounds (R2) у Sounds.init().
   const SOUND_CHANNELS = [
-    { id: "rain", emoji: "🌧", name: "Дощ", url: "" },
-    { id: "cafe", emoji: "☕", name: "Кафе", url: "" },
-    { id: "fire", emoji: "🔥", name: "Вогнище", url: "" },
-    { id: "ocean", emoji: "🌊", name: "Океан", url: "" },
-    { id: "forest", emoji: "🌲", name: "Ліс", url: "" },
-    { id: "wind", emoji: "🌬", name: "Вітер", url: "" },
-    { id: "white", emoji: "🤍", name: "White noise", url: "" },
-    { id: "brown", emoji: "🟤", name: "Brown noise", url: "" },
+    // Free (4)
+    { id: "rain", emoji: "🌧", name: "Дощ", url: "", premium: false },
+    { id: "cafe", emoji: "☕", name: "Кафе", url: "", premium: false },
+    { id: "fire", emoji: "🔥", name: "Вогнище", url: "", premium: false },
+    { id: "ocean", emoji: "🌊", name: "Океан", url: "", premium: false },
+    // Premium (12)
+    { id: "forest", emoji: "🌲", name: "Ліс", url: "", premium: true },
+    { id: "wind", emoji: "🌬", name: "Вітер", url: "", premium: true },
+    { id: "white", emoji: "🤍", name: "White noise", url: "", premium: true },
+    { id: "brown", emoji: "🟤", name: "Brown noise", url: "", premium: true },
+    { id: "library", emoji: "📚", name: "Бібліотека", url: "", premium: true },
+    { id: "soft-rain", emoji: "🌦", name: "Ніжний дощ", url: "", premium: true },
+    { id: "thunder", emoji: "⛈", name: "Гроза", url: "", premium: true },
+    { id: "stream", emoji: "💧", name: "Струмок", url: "", premium: true },
+    { id: "night", emoji: "🦗", name: "Нічні звуки", url: "", premium: true },
+    { id: "traffic", emoji: "🚗", name: "Місто", url: "", premium: true },
+    { id: "piano", emoji: "🎹", name: "Піаніно", url: "", premium: true },
+    { id: "bowl", emoji: "🛕", name: "Співаючі чаші", url: "", premium: true },
   ];
 
   // типові пресети (підказки, не зберігаються)
@@ -2689,6 +2810,17 @@
     }
 
     async function toggle(ch) {
+      // Premium-gate: locked-звук без підписки → paywall
+      if (ch.premium && !state.isPremium) {
+        openSubscribe();
+        haptic("med");
+        return;
+      }
+      // Звук без url (файл ще не завантажений у R2) — не даємо вмикати
+      if (ch.premium && !ch.url) {
+        toast("Цей звук скоро з'явиться");
+        return;
+      }
       const ctx = audioCtx();
       if (ctx && ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
       if (active[ch.id]) {
@@ -2741,10 +2873,14 @@
         const isLoading = nodes[ch.id] && nodes[ch.id].loading;
         const vol = active[ch.id] != null ? Math.round(active[ch.id] * 100) : 60;
         const emoji = isLoading ? '<span class="sound-spin">⏳</span>' : ch.emoji;
-        return '<div class="sound-card' + (on ? " active" : "") + '" data-id="' + ch.id + '">' +
-          '<div class="sound-emoji">' + emoji + '</div>' +
+        // Locked = premium звук без підписки або без файла в R2
+        const locked = ch.premium && (!state.isPremium || !ch.url);
+        return '<div class="sound-card' + (on ? " active" : "") + (locked ? " locked" : "") + '" data-id="' + ch.id + '">' +
+          '<div class="sound-emoji">' + emoji + (locked ? '<span class="lock-badge">🔒</span>' : '') + '</div>' +
           '<div class="sound-name">' + ch.name + '</div>' +
-          '<input type="range" class="sound-volume" min="0" max="100" value="' + vol + '" data-id="' + ch.id + '" />' +
+          (locked
+            ? '<div class="sound-premium-tag">Premium</div>'
+            : '<input type="range" class="sound-volume" min="0" max="100" value="' + vol + '" data-id="' + ch.id + '" />') +
           '</div>';
       }).join("");
 
@@ -2815,7 +2951,10 @@
         const d = await r.json();
         (d.sounds || []).forEach((s) => {
           const ch = SOUND_CHANNELS.find((c) => c.id === s.id);
-          if (ch) { ch.url = s.url; if (s.emoji) ch.emoji = s.emoji; if (s.name) ch.name = s.name; }
+          if (ch) {
+            ch.url = s.url; if (s.emoji) ch.emoji = s.emoji; if (s.name) ch.name = s.name;
+            if (typeof s.premium === "boolean") ch.premium = s.premium;
+          }
         });
         _urlsLoaded = true;
       } catch (e) {}
@@ -2968,6 +3107,8 @@
       has_start_param: Boolean(state.launchStartParam),
     });
     await loadProfile();
+    // Перевіряємо premium-тему після завантаження профілю (можливо fallback на dark)
+    initThemeGuard();
     // передзавантажуємо список треків, щоб pickDefaultTrack мав дані
     Music.load().catch(() => {});
     // фонова передачація демо-треків у IndexedDB (щоб не чекати при першому play)

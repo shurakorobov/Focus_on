@@ -23,12 +23,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialInterruptedException
+import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
+import androidx.credentials.exceptions.NoCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -94,25 +103,70 @@ class MainActivity : ComponentActivity() {
                 jwt = null
             })
         } else {
-            LoginScreen(onLogin = { idToken ->
+            LoginScreen(onLogin = { idToken, onResult ->
                 scope.launch {
                     val token = exchangeGoogleLogin(idToken)
                     if (token != null) {
                         saveJwt(token)
                         jwt = token
+                    } else {
+                        // бекенд відхилив ID-токен
+                        onResult(false)
                     }
                 }
             })
         }
     }
 
-    // ── Екран входу (Google Sign-In через Credential Manager) ─────
+    // ── Екран входу (Google Sign-In: One Tap + fallback на AccountPicker) ─
     @Composable
-    private fun LoginScreen(onLogin: (idToken: String) -> Unit) {
+    private fun LoginScreen(onLogin: (idToken: String, onResult: (Boolean) -> Unit) -> Unit) {
         val ctx = LocalContext.current
         val scope = rememberCoroutineScope()
         var loading by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<String?>(null) }
+        // Fallback launcher — якщо One Tap не спрацював, користувач може
+        // спробувати класичний діалог вибору акаунта.
+        var useFallback by remember { mutableStateOf(false) }
+
+        val signInLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            loading = false
+            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+            try {
+                val account = task.getResult(ApiException::class.java)
+                val idToken = account.idToken
+                if (idToken != null) {
+                    loading = true
+                    error = "Обмін токена на сесію…"
+                    scope.launch {
+                        onLogin(idToken) { ok ->
+                            loading = false
+                            if (!ok) {
+                                error = "Сервер відхилив токен. Перевірте GOOGLE_OAUTH_CLIENT_ID у Render."
+                            }
+                        }
+                    }
+                } else {
+                    error = "Не вдалося отримати токен."
+                }
+            } catch (e: ApiException) {
+                val msg = when (e.statusCode) {
+                    16 -> "DEVELOPER_ERROR (16): перевірте SHA-1/package в Google Console"
+                    12501 -> "Вхід скасовано"
+                    4 -> "Вхід скасовано"
+                    10 -> "DEVELOPER_ERROR (10): Android-клієнт не знайдений у Google Console"
+                    7 -> "Помилка мережі Google"
+                    else -> "Помилка входу (${e.statusCode}): ${e.message}"
+                }
+                error = msg
+                Log.e(TAG, "GoogleSignIn ApiException statusCode=${e.statusCode}", e)
+            } catch (e: Exception) {
+                error = "Помилка: ${e.message}"
+                Log.e(TAG, "GoogleSignIn помилка", e)
+            }
+        }
 
         Column(
             modifier = Modifier
@@ -142,12 +196,37 @@ class MainActivity : ComponentActivity() {
                     loading = true
                     error = null
                     scope.launch {
-                        val idToken = signInWithGoogle(ctx)
-                        if (idToken != null) {
-                            onLogin(idToken)
+                        if (useFallback) {
+                            // Класичний GoogleSignIn Intent (повноекранний вибір)
+                            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                                .requestIdToken(AppConfig.GOOGLE_WEB_CLIENT_ID)
+                                .requestEmail()
+                                .build()
+                            val client = GoogleSignIn.getClient(ctx, gso)
+                            signInLauncher.launch(client.signInIntent)
                         } else {
-                            loading = false
-                            error = "Не вдалося увійти. Перевірте підключення до інтернету."
+                            // Спроба One Tap через Credential Manager
+                            val idToken = signInWithGoogleOneTap(ctx)
+                            if (idToken != null) {
+                                loading = true
+                                error = "Обмін токена на сесію…"
+                                onLogin(idToken) { ok ->
+                                    loading = false
+                                    if (!ok) {
+                                        error = "Сервер відхилив токен. Перевірте GOOGLE_OAUTH_CLIENT_ID у Render."
+                                    }
+                                }
+                            } else {
+                                loading = false
+                                val err = lastSignInError
+                                if (err != null && err.contains("скасовано", ignoreCase = true)) {
+                                    // One Tap дав cancellation — запропонуємо fallback
+                                    useFallback = true
+                                    error = "One Tap не спрацював. Спробуйте класичний вхід ↓"
+                                } else {
+                                    error = err ?: "Вхід не вдався"
+                                }
+                            }
                         }
                     }
                 },
@@ -165,7 +244,10 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.size(24.dp)
                     )
                 } else {
-                    Text("Увійти через Google", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (useFallback) "Спробувати класичний вхід" else "Увійти через Google",
+                        fontSize = 17.sp, fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
             error?.let {
@@ -183,34 +265,62 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Запускає Google Sign-In через Credential Manager (One Tap).
-     *  Повертає idToken або null. */
-    private suspend fun signInWithGoogle(ctx: Context): String? {
+    // Остання помилка входу (для показу користувачу деталей)
+    private var lastSignInError: String? = null
+
+    /** One Tap через Credential Manager з повтором при transient cancellation. */
+    private suspend fun signInWithGoogleOneTap(ctx: Context): String? {
+        lastSignInError = null
         return withContext(Dispatchers.Main) {
-            try {
-                val credentialManager = CredentialManager.create(ctx)
-                val googleIdOption = GetGoogleIdOption.Builder()
-                    .setFilterByAuthorizedAccounts(false)
-                    .setServerClientId(AppConfig.GOOGLE_WEB_CLIENT_ID)
-                    .build()
-                val request = GetCredentialRequest.Builder()
-                    .addCredentialOption(googleIdOption)
-                    .build()
-                val result = credentialManager.getCredential(
-                    request = request,
-                    context = ctx as ComponentActivity,
-                )
-                val cred = result.credential
-                if (cred is CustomCredential && cred.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                    GoogleIdTokenCredential.createFrom(cred.data).idToken
-                } else {
-                    Log.w(TAG, "Невідомий тип credential: ${cred.type}")
-                    null
+            repeat(2) { attempt ->
+                try {
+                    val credentialManager = CredentialManager.create(ctx)
+                    val googleIdOption = GetGoogleIdOption.Builder()
+                        .setFilterByAuthorizedAccounts(false)
+                        .setServerClientId(AppConfig.GOOGLE_WEB_CLIENT_ID)
+                        .setNonce(java.util.UUID.randomUUID().toString())
+                        .build()
+                    val request = GetCredentialRequest.Builder()
+                        .addCredentialOption(googleIdOption)
+                        .build()
+                    val result = credentialManager.getCredential(
+                        request = request,
+                        context = ctx as ComponentActivity,
+                    )
+                    val cred = result.credential
+                    if (cred is CustomCredential && cred.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                        return@withContext GoogleIdTokenCredential.createFrom(cred.data).idToken
+                    }
+                    lastSignInError = "Невідомий тип облікових даних: ${cred.type}"
+                    return@withContext null
+                } catch (e: GetCredentialCancellationException) {
+                    // На першій спробі cancellation часто буває хибною — повторимо
+                    if (attempt == 0) {
+                        kotlinx.coroutines.delay(300)
+                        return@repeat
+                    }
+                    lastSignInError = "Вхід скасовано"
+                    return@withContext null
+                } catch (e: GetCredentialInterruptedException) {
+                    if (attempt == 0) {
+                        kotlinx.coroutines.delay(300)
+                        return@repeat
+                    }
+                    lastSignInError = "Вхід перервано"
+                    return@withContext null
+                } catch (e: GetCredentialProviderConfigurationException) {
+                    lastSignInError = "Google Play Services недоступні"
+                    return@withContext null
+                } catch (e: NoCredentialException) {
+                    lastSignInError = "На пристрої немає Google-акаунтів"
+                    return@withContext null
+                } catch (e: Exception) {
+                    lastSignInError = "Помилка: ${e.message ?: e.javaClass.simpleName}"
+                    Log.e(TAG, "One Tap помилка", e)
+                    return@withContext null
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Google Sign-In помилка", e)
-                null
             }
+            null
         }
     }
 

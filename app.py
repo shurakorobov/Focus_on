@@ -199,6 +199,26 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ------------------------------ авторизація ---------------------------------
 
 
+def _demo_user() -> dict:
+    """Фіктивний користувач для демо-режиму (анонімний доступ з браузера).
+
+    Використовується тільки коли DEMO_MODE=true і запит прийшов без auth.
+    Дозволяє переглядати UI, тестити фічі, робити скріншоти.
+    tg_id=999999 — фіксований, premium=free (щоб показувати paywall).
+    """
+    return {
+        "id": 999999,
+        "tg_id": 999999,
+        "first_name": "Demo",
+        "last_name": "",
+        "username": "demo",
+        "photo_url": "",
+        "email": "",
+        "avatar_url": "",
+        "google_id": "",
+    }
+
+
 def current_user(request: Request) -> dict:
     """DI-залежність: автентифікує запит.
 
@@ -230,8 +250,15 @@ def current_user(request: Request) -> dict:
             except Exception:
                 body = {}
             init_data = body.get("init_data", "") if isinstance(body, dict) else ""
-        user = authenticate(init_data)
-        if not user:
+        if init_data:
+            user = authenticate(init_data)
+            if not user:
+                raise HTTPException(status_code=401, detail="invalid telegram auth")
+        elif settings.DEMO_MODE:
+            # Демо-режим: анонімний доступ (тест/скріншоти з браузера).
+            # Реальні користувачі завжди мають initData або JWT — сюди не доходять.
+            user = _demo_user()
+        else:
             raise HTTPException(status_code=401, detail="invalid telegram auth")
 
     # Доповнюємо профільними даними з БД (email, avatar_url — для Google-юзерів),
@@ -518,22 +545,59 @@ async def api_categories():
     return {"categories": db.CATEGORIES, "modes": db.FOCUS_MODES}
 
 
+# Звуки, що доступні безкоштовно. Решта — premium (url віддається тільки premium-юзерам).
+_FREE_SOUND_IDS = {"rain", "cafe", "fire", "ocean"}
+
+
 @app.get("/api/sounds")
-async def api_sounds():
-    """Перелік ambient-звуків з R2 (URL + метадані).
-    Без авторизації — це публічні лупи."""
+async def api_sounds(request: Request):
+    """Перелік ambient-звуків з R2 (URL + метадані) + premium-gating.
+
+    Без авторизації: віддаються всі звуки, але premium-звукам url="" (фронт покаже lock).
+    Premium-юзери (JWT/initData) отримують повні URL для всіх 16 звуків.
+    """
     base = settings.R2_PUBLIC_URL
     # id має збігатися з SOUND_CHANNELS у app.js
-    sounds = [
-        {"id": "rain", "emoji": "🌧", "name": "Дощ", "url": f"{base}/rain.mp3"},
-        {"id": "cafe", "emoji": "☕", "name": "Кафе", "url": f"{base}/cafe.mp3"},
-        {"id": "fire", "emoji": "🔥", "name": "Вогнище", "url": f"{base}/fire.mp3"},
-        {"id": "ocean", "emoji": "🌊", "name": "Океан", "url": f"{base}/ocean.mp3"},
-        {"id": "forest", "emoji": "🌲", "name": "Ліс", "url": f"{base}/forest.mp3"},
-        {"id": "wind", "emoji": "🌬", "name": "Вітер", "url": f"{base}/wind.mp3"},
-        {"id": "white", "emoji": "🤍", "name": "White noise", "url": f"{base}/white.mp3"},
-        {"id": "brown", "emoji": "🟤", "name": "Brown noise", "url": f"{base}/brown.mp3"},
+    all_sounds = [
+        # Free (4)
+        {"id": "rain", "emoji": "🌧", "name": "Дощ", "premium": False},
+        {"id": "cafe", "emoji": "☕", "name": "Кафе", "premium": False},
+        {"id": "fire", "emoji": "🔥", "name": "Вогнище", "premium": False},
+        {"id": "ocean", "emoji": "🌊", "name": "Океан", "premium": False},
+        # Premium (12): 4 існуючі + 8 нових
+        {"id": "forest", "emoji": "🌲", "name": "Ліс", "premium": True},
+        {"id": "wind", "emoji": "🌬", "name": "Вітер", "premium": True},
+        {"id": "white", "emoji": "🤍", "name": "White noise", "premium": True},
+        {"id": "brown", "emoji": "🟤", "name": "Brown noise", "premium": True},
+        {"id": "library", "emoji": "📚", "name": "Бібліотека", "premium": True},
+        {"id": "soft-rain", "emoji": "🌦", "name": "Ніжний дощ", "premium": True},
+        {"id": "thunder", "emoji": "⛈", "name": "Гроза", "premium": True},
+        {"id": "stream", "emoji": "💧", "name": "Струмок", "premium": True},
+        {"id": "night", "emoji": "🦗", "name": "Нічні звуки", "premium": True},
+        {"id": "traffic", "emoji": "🚗", "name": "Місто", "premium": True},
+        {"id": "piano", "emoji": "🎹", "name": "Піаніно", "premium": True},
+        {"id": "bowl", "emoji": "🛕", "name": "Співаючі чаші", "premium": True},
     ]
+    # Визначаємо premium-статус юзера (мяко, без помилок для анонімів)
+    is_prem = False
+    try:
+        user = current_user(request)
+        if user and user.get("id") != 999999:  # не demo
+            is_prem = db.is_premium(user["id"])
+    except Exception:
+        pass
+
+    sounds = []
+    for s in all_sounds:
+        # URL віддаємо: для free-звуків завжди; для premium — тільки premium-юзерам
+        give_url = (not s["premium"]) or is_prem
+        sounds.append({
+            "id": s["id"],
+            "emoji": s["emoji"],
+            "name": s["name"],
+            "premium": s["premium"],
+            "url": f"{base}/{s['id']}.mp3" if give_url else "",
+        })
     return {"sounds": sounds}
 
 
