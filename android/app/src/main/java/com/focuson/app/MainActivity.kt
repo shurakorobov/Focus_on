@@ -232,8 +232,40 @@ class MainActivity : ComponentActivity() {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = false
+                    // Адаптивність: widest viewport без обмеження ширини
+                    settings.useWideViewPort = true
+                    settings.loadWithOverviewMode = true
                     webChromeClient = WebChromeClient()
-                    webViewClient = WebViewClient()
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            // Ін'єкція JWT: window.__JWT + перехоплення fetch/XHR
+                            // після повного завантаження сторінки (надійніше ніж через iframe)
+                            val js = """
+                                (function(){
+                                  window.__JWT = "$jwt";
+                                  if (window._jwtInjected) return;
+                                  window._jwtInjected = true;
+                                  var of = window.fetch;
+                                  window.fetch = function(u,o){
+                                    o=o||{}; o.headers=o.headers||{};
+                                    if(!o.headers['Authorization']) o.headers['Authorization']='Bearer '+window.__JWT;
+                                    return of(u,o);
+                                  };
+                                  var ox = window.XMLHttpRequest.prototype.open;
+                                  window.XMLHttpRequest.prototype.open = function(m,u){
+                                    this._u=u; return ox.apply(this,arguments);
+                                  };
+                                  var os = window.XMLHttpRequest.prototype.send;
+                                  window.XMLHttpRequest.prototype.send = function(){
+                                    try{ this.setRequestHeader('Authorization','Bearer '+window.__JWT); }catch(e){}
+                                    return os.apply(this,arguments);
+                                  };
+                                })();
+                            """.trimIndent()
+                            view?.evaluateJavascript(js, null)
+                        }
+                    }
 
                     // Нативний міст: JS викликає AndroidNative.startFocus(...) і .purchasePremium()
                     val billing = BillingManager(
@@ -248,77 +280,39 @@ class MainActivity : ComponentActivity() {
                     FocusBridge.tick = { sec ->
                         post {
                             evaluateJavascript(
-                                "(function(){try{var f=document.getElementById('f');" +
-                                "if(f&&f.contentWindow)f.contentWindow.postMessage(" +
-                                "{type:'focus_tick',remaining:$sec},'*');}catch(e){}})();", null
+                                "(function(){try{window.postMessage({type:'focus_tick',remaining:$sec},'*');" +
+                                "var d=document;if(d.defaultView)d.defaultView.postMessage({type:'focus_tick',remaining:$sec},'*');" +
+                                "}catch(e){}})();", null
                             )
                         }
                     }
                     FocusBridge.finished = {
                         post {
                             evaluateJavascript(
-                                "(function(){try{var f=document.getElementById('f');" +
-                                "if(f&&f.contentWindow)f.contentWindow.postMessage(" +
-                                "{type:'focus_finished'},'*');}catch(e){}})();", null
+                                "(function(){try{window.postMessage({type:'focus_finished'},'*');" +
+                                "var d=document;if(d.defaultView)d.defaultView.postMessage({type:'focus_finished'},'*');" +
+                                "}catch(e){}})();", null
                             )
                         }
                     }
-                    // Результат покупки premium → postMessage в iframe
+                    // Результат покупки premium → postMessage прямо в document (без iframe)
                     BillingBridge.onPurchaseResult = { ok, token ->
                         post {
-                            // JSON-кодуємо token безпечно (екрануєє спецсимволи/кавички)
+                            // JSON-кодуємо token безпечно
                             val payload = JSONObject()
                                 .put("type", if (ok) "purchase_success" else "purchase_failed")
                                 .put("token", token)
                                 .toString()
                             evaluateJavascript(
-                                "(function(){try{var f=document.getElementById('f');" +
-                                "if(f&&f.contentWindow)f.contentWindow.postMessage(" +
-                                "$payload,'*');}catch(e){}})();", null
+                                "(function(){try{window.postMessage($payload,'*');" +
+                                "var d=document;if(d.defaultView)d.defaultView.postMessage($payload,'*');" +
+                                "}catch(e){}})();", null
                             )
                         }
                     }
-                    // Завантажуємо сторінку з інжекцією JWT через обгортку fetch
-                    val html = """
-                        <!DOCTYPE html><html><head><meta charset="utf-8">
-                        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-                        <style>
-                          html,body{margin:0;padding:0;background:#07030f;height:100%;overflow:hidden;}
-                          #f{position:fixed;inset:0;border:none;width:100%;height:100%;}
-                        </style></head><body>
-                        <iframe id="f" src="${AppConfig.BASE_URL}/"></iframe>
-                        <script>
-                          const JWT = "$jwt";
-                          const f = document.getElementById('f');
-                          f.onload = function() {
-                            try {
-                              const w = f.contentWindow;
-                              w.__JWT = JWT;
-                              w.eval([
-                                "(function(){",
-                                "  var of = window.fetch;",
-                                "  window.fetch = function(u,o){",
-                                "    o=o||{}; o.headers=o.headers||{};",
-                                "    o.headers['Authorization']='Bearer '+window.__JWT;",
-                                "    return of(u,o);",
-                                "  };",
-                                "  var ox = window.XMLHttpRequest.prototype.open;",
-                                "  window.XMLHttpRequest.prototype.open = function(m,u){",
-                                "    this._u=u; return ox.apply(this,arguments);",
-                                "  };",
-                                "  var os = window.XMLHttpRequest.prototype.send;",
-                                "  window.XMLHttpRequest.prototype.send = function(){",
-                                "    try{ this.setRequestHeader('Authorization','Bearer '+window.__JWT); }catch(e){}",
-                                "    return os.apply(this,arguments);",
-                                "  };",
-                                "})();"
-                              ].join('\n'));
-                            } catch(e) { console.error('inject', e); }
-                          };
-                        </script>
-                        </body></html>
-                    """.trimIndent()
-                    loadDataWithBaseURL(AppConfig.BASE_URL + "/", html, "text/html", "utf-8", null)
+                    // Завантажуємо застосунок напряму (без iframe).
+                    // JWT ін'єкція відбувається в onPageFinished (вище).
+                    loadUrl("${AppConfig.BASE_URL}/")
                 }
             },
             modifier = Modifier.fillMaxSize(),

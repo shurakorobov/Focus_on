@@ -166,6 +166,15 @@ body {
   margin: 0 auto;
   width: 100%;
 }
+/* Планшети: розширюємо до 720px щоб не було порожніх країв */
+@media (min-width: 600px) {
+  body { max-width: 720px; }
+}
+/* Великі планшети/десктопи: до 840px */
+@media (min-width: 900px) {
+  body { max-width: 840px; }
+}
+}
 
 .hidden { display: none !important; }
 
@@ -1408,20 +1417,20 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 }
 .timer-wrap .ring { z-index: 1; }
 .timer-wrap .timer-center { z-index: 2; }
-.timer-wrap.running::before { opacity: 0.12; }
+.timer-wrap.running::before { opacity: 0.18; }
 .timer-wrap.running .ring {
-  animation: breatheRing 7s ease-in-out infinite;
+  animation: breatheRing 6s ease-in-out infinite;
 }
 .timer-wrap.running::before {
-  animation: breatheGlow 7s ease-in-out infinite;
+  animation: breatheGlow 6s ease-in-out infinite;
 }
 @keyframes breatheRing {
   0%, 100% { transform: rotate(-90deg) scale(1); }
-  50%      { transform: rotate(-90deg) scale(1.03); }
+  50%      { transform: rotate(-90deg) scale(1.06); }
 }
 @keyframes breatheGlow {
-  0%, 100% { opacity: 0.10; transform: scale(0.96); }
-  50%      { opacity: 0.24; transform: scale(1.06); }
+  0%, 100% { opacity: 0.15; transform: scale(0.92); }
+  50%      { opacity: 0.40; transform: scale(1.12); }
 }
 @media (prefers-reduced-motion: reduce) {
   .timer-wrap.running .ring,
