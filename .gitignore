@@ -39,3 +39,7 @@ cloudflared*
 
 # ZCode local
 .zcode/
+
+# APK файли (не комітити — займають багато місця)
+*.apk
+FocusON-v*.apk
