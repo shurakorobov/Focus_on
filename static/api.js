@@ -7,10 +7,24 @@ const API = (() => {
 
   function getInitData() {
     if (initData) return initData;
-    if (window.Telegram && window.Telegram.WebApp) {
-      initData = window.Telegram.WebApp.initData || "";
+    // 1) JS-об'єкт від Telegram WebApp SDK (найнадійніше)
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+      initData = window.Telegram.WebApp.initData;
     }
-    return initData;
+    // 2) Fallback: URL-параметр ?tgWebAppInitData=... (Telegram на деяких платформах
+    //    передає initData через URL, напр. webview на iPad, або зовнішній браузер)
+    if (!initData) {
+      const qs = new URLSearchParams(window.location.search || "");
+      const fromUrl = qs.get("tgWebAppInitData");
+      if (fromUrl) initData = fromUrl;
+    }
+    // 3) Fallback: хеш-фрагмент #tgWebAppInitData=... (Telegram iOS у деяких версіях)
+    if (!initData) {
+      const h = new URLSearchParams(window.location.hash ? window.location.hash.replace(/^#/, "") : "");
+      const fromHash = h.get("tgWebAppInitData");
+      if (fromHash) initData = fromHash;
+    }
+    return initData || "";
   }
 
   async function request(method, path, { json, body, params } = {}) {

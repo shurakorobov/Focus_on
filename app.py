@@ -219,6 +219,29 @@ def _demo_user() -> dict:
     }
 
 
+def _log_init_data_failure(init_data: str, request: Request) -> None:
+    """Логує причину невдалої перевірки initData (для діагностики вебапп)."""
+    try:
+        import logging
+        log = logging.getLogger("focuson")
+        ua = request.headers.get("user-agent", "")[:80]
+        # розбір
+        parsed = {}
+        try:
+            parsed = dict(parse_qsl(init_data, keep_blank_values=True))
+        except Exception:
+            pass
+        has_hash = "hash" in parsed
+        has_user = "user" in parsed
+        auth_date = parsed.get("auth_date", "")
+        log.warning(
+            "initData invalid: len=%d has_hash=%s has_user=%s auth_date=%s ua=%s",
+            len(init_data), has_hash, has_user, auth_date, ua,
+        )
+    except Exception:
+        pass
+
+
 def current_user(request: Request) -> dict:
     """DI-залежність: автентифікує запит.
 
@@ -253,8 +276,10 @@ def current_user(request: Request) -> dict:
         if init_data:
             user = authenticate(init_data)
             if not user:
-                # Невірний initData. У DEMO_MODE — fallback на demo user
-                # (вебапп може надсилати пошкоджений initData у деяких випадках).
+                # Невірний initData — логуємо причину для діагностики.
+                # У DEMO_MODE — fallback на demo user (вебапп може надсилати
+                # пошкоджений initData у деяких випадках).
+                _log_init_data_failure(init_data, request)
                 if settings.DEMO_MODE:
                     user = _demo_user()
                 else:
