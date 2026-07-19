@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 import db
 import storage
 from config import settings
-from telegram_auth import authenticate, verify_login_widget
+from telegram_auth import authenticate, verify_init_data, verify_login_widget
 from jwt_auth import create_token, verify_token
 
 BASE_DIR = Path(__file__).parent
