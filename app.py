@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -425,6 +427,62 @@ class ProductEventReq(BaseModel):
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok", "configured": settings.is_configured}
+
+
+@app.api_route("/api/debug/initdata", methods=["GET", "POST"])
+async def debug_initdata(request: Request):
+    """Діагностичний endpoint: показує що саме прийшло від клієнта
+    і чому initData не валідний. Тимчасово — прибрати після діагностики."""
+    auth = request.headers.get("authorization", "")
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    init_data = token or request.query_params.get("init_data", "")
+    if not init_data:
+        try:
+            body = await request.json()
+            init_data = body.get("init_data", "") if isinstance(body, dict) else ""
+        except Exception:
+            pass
+
+    info = {
+        "has_auth_header": bool(auth),
+        "token_len": len(token),
+        "init_data_len": len(init_data),
+        "init_data_preview": init_data[:120] + "…" if len(init_data) > 120 else init_data,
+        "user_agent": request.headers.get("user-agent", "")[:120],
+        "host": request.headers.get("host", ""),
+        "origin": request.headers.get("origin", ""),
+        "referer": request.headers.get("referer", "")[:120],
+    }
+    if init_data:
+        try:
+            parsed = dict(parse_qsl(init_data, keep_blank_values=True))
+            info["parsed_keys"] = sorted(parsed.keys())
+            info["has_hash"] = "hash" in parsed
+            info["has_user"] = "user" in parsed
+            info["auth_date"] = parsed.get("auth_date", "")
+            # спробуємо розібрати user
+            user_raw = parsed.get("user", "")
+            if user_raw:
+                try:
+                    info["user_id"] = json.loads(user_raw).get("id")
+                except Exception as e:
+                    info["user_parse_error"] = str(e)
+            # спробуємо верифікувати
+            verified = verify_init_data(init_data, settings.BOT_TOKEN) if settings.has_token else None
+            info["verified"] = bool(verified)
+            info["verified_user"] = verified.get("id") if verified else None
+            if not verified:
+                # порахуємо hash самі і порівняємо
+                received = parsed.pop("hash", None)
+                data_check = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+                secret = hmac.new(b"WebAppData", settings.BOT_TOKEN.encode(), hashlib.sha256).digest()
+                computed = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
+                info["hash_match"] = (received == computed) if received else False
+                info["received_hash_prefix"] = (received or "")[:16]
+                info["computed_hash_prefix"] = computed[:16]
+        except Exception as e:
+            info["parse_error"] = str(e)
+    return info
 
 
 class TelegramLoginReq(BaseModel):
