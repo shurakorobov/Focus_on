@@ -157,20 +157,27 @@ html, body {
   background-attachment: fixed;
 }
 
+/* html — повна висота viewport (фіксовано, бо 100vh в Android WebView
+   іноді стискається до <100% при useWideViewPort+loadWithOverviewMode). */
+html {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  /* 100dvh — для Android WebView / Telegram iOS (100vh іноді не враховує keyboard/zoom).
-     fallback 100vh якщо dvh не підтримується. */
-  min-height: 100dvh;
-  height: 100vh;
-  height: 100dvh;
   padding-top: env(safe-area-inset-top);
   max-width: 480px;
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
+  overflow: hidden;
 }
 /* Планшети: розширюємо до 720px щоб не було порожніх країв */
 @media (min-width: 600px) {

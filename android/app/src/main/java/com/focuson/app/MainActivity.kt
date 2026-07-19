@@ -81,11 +81,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun AppContent() {
-        // DEBUG: для діагностики layout WebView — пустим JWT щоб пройти без входу.
-        // Тимчасово, прибрати перед production збіркою.
-        val DEBUG_LAYOUT = true
-        val debugJwt = "DEBUG_BYPASS"
-        var jwt by remember { mutableStateOf(getSavedJwt() ?: if (DEBUG_LAYOUT) debugJwt else null) }
+        var jwt by remember { mutableStateOf(getSavedJwt()) }
         val scope = rememberCoroutineScope()
 
         if (jwt != null) {
