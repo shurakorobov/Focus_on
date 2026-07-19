@@ -1501,6 +1501,115 @@ input[type="text"]:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 
 
 
+/* ===== Екран входу (browser, коли нема initData/JWT) ===== */
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500; /* вище за все: онбординг (300), тости (200), модалки (100) */
+  background:
+    radial-gradient(ellipse 100% 70% at 50% 0%, var(--bg-grad-1) 0%, var(--bg-grad-2) 60%, var(--bg) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+  animation: fadeIn 0.25s ease;
+}
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 28px 24px calc(28px + env(safe-area-inset-bottom));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  text-align: center;
+}
+.auth-logo {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 10px;
+}
+.auth-sub {
+  font-size: 14px;
+  color: var(--label-2);
+  line-height: 1.5;
+  margin: 0 0 22px;
+}
+.auth-steps {
+  text-align: left;
+  font-size: 14px;
+  color: var(--label-2);
+  line-height: 1.7;
+  margin: 0 0 20px;
+  padding-left: 20px;
+}
+.auth-steps code {
+  background: var(--surface-2);
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--accent);
+}
+.auth-bot-btn {
+  display: block;
+  width: 100%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  text-decoration: none;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+  transition: transform 0.1s;
+}
+.auth-bot-btn:active { transform: scale(0.98); }
+.auth-input {
+  width: 100%;
+  background: var(--surface-2);
+  border: 2px solid var(--separator);
+  border-radius: 12px;
+  color: var(--label);
+  padding: 16px;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 8px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 14px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.auth-input::placeholder { color: var(--label-3); letter-spacing: 4px; }
+.auth-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.auth-submit {
+  width: 100%;
+  margin-bottom: 6px;
+}
+.auth-error {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 14px;
+  border-radius: 10px;
+  margin-top: 8px;
+}
+.auth-hint {
+  font-size: 12px;
+  color: var(--label-3);
+  line-height: 1.5;
+  margin: 14px 0 0;
+}
+
 /* ===== Premium: heatmap + trend-badge ===== */
 .trend-badge {
   margin: 12px 0 4px;

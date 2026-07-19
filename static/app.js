@@ -592,6 +592,69 @@
   }
 
   // ---------- Профіль ----------
+  // Екран входу через bot-code (показується в браузері без initData/JWT).
+  function showAuthOverlay() {
+    const ov = $("#auth-overlay");
+    if (ov) ov.classList.remove("hidden");
+    const input = $("#auth-code-input");
+    if (input) input.value = "";
+    const err = $("#auth-error");
+    if (err) err.classList.add("hidden");
+    const submit = $("#auth-submit");
+    if (submit) submit.disabled = true;
+  }
+  function hideAuthOverlay() {
+    const ov = $("#auth-overlay");
+    if (ov) ov.classList.add("hidden");
+  }
+  async function submitLoginCode(code) {
+    const submit = $("#auth-submit");
+    const err = $("#auth-error");
+    if (submit) submit.disabled = true;
+    if (err) { err.classList.add("hidden"); }
+    try {
+      const r = await fetch("/api/auth/exchange-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      if (!r.ok) throw new Error("invalid");
+      const data = await r.json();
+      if (!data || !data.token) throw new Error("no token");
+      API.setJwt(data.token);
+      hideAuthOverlay();
+      await loadProfile();
+    } catch (e) {
+      if (err) {
+        err.textContent = "Невірний або прострочений код. Спробуйте ще раз.";
+        err.classList.remove("hidden");
+      }
+      if (submit) submit.disabled = false;
+      const input = $("#auth-code-input");
+      if (input) { input.value = ""; input.focus(); }
+    }
+  }
+  function setupAuthOverlay() {
+    const input = $("#auth-code-input");
+    const submit = $("#auth-submit");
+    if (!input || !submit) return;
+    // Лише цифри, максимум 6
+    input.addEventListener("input", () => {
+      input.value = (input.value || "").replace(/\D/g, "").slice(0, 6);
+      submit.disabled = input.value.length !== 6;
+    });
+    // Enter → підтвердити
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && input.value.length === 6) {
+        submitLoginCode(input.value);
+      }
+    });
+    // Кнопка «Увійти»
+    submit.addEventListener("click", () => {
+      if (input.value.length === 6) submitLoginCode(input.value);
+    });
+  }
+
   async function loadProfile() {
     try {
       const data = await API.me();
@@ -620,6 +683,12 @@
       updateGreeting();
       refreshFocusMeta();
     } catch (e) {
+      if (e && e.status === 401) {
+        // Немає авторизації (звичайний браузер без initData/JWT) — показуємо
+        // екран входу через bot-code замість тексту про помилку.
+        showAuthOverlay();
+        return;
+      }
       $("#profile-head").innerHTML = '<div class="hint-inline">Не вдалося завантажити профіль</div>';
     }
   }
@@ -701,7 +770,7 @@
     if (window.__JWT) {
       authParam = "jwt=" + encodeURIComponent(window.__JWT);
     } else {
-      const initData = API.getInitData();
+      const initData = API.getAuthToken();
       if (!initData) return;
       authParam = "init_data=" + encodeURIComponent(initData);
     }
@@ -3096,6 +3165,7 @@
     setupVisibilityHandler();
     setupCrashReporting();
     setupHeartbeat();
+    setupAuthOverlay();
     Sounds.init();
     selectMode("focus");
     setFabIcon(false);
@@ -3106,7 +3176,13 @@
       telegram_version: (tg && tg.version) || "unknown",
       has_start_param: Boolean(state.launchStartParam),
     });
-    await loadProfile();
+    // Якщо немає авторизації (звичайний браузер) — показуємо екран входу,
+    // інакше намагаємося завантажити профіль (що також може вивести на вхід).
+    if (!API.getAuthToken()) {
+      showAuthOverlay();
+    } else {
+      await loadProfile();
+    }
     // Перевіряємо premium-тему після завантаження профілю (можливо fallback на dark)
     initThemeGuard();
     // передзавантажуємо список треків, щоб pickDefaultTrack мав дані

@@ -1,30 +1,58 @@
 // ===== Focus ON — API-клієнт =====
 // Усі запити до бекенду проходять через цей модуль.
-// Авторизація — через initData Telegram WebApp, що додається до кожного запиту.
+// Авторизація (у порядку пріоритету):
+//   1. JWT з localStorage (після bot-code входу в браузері)
+//   2. initData з Telegram WebApp SDK (Mini App)
+//   3. ?tgWebAppInitData= (Telegram на iPad / зовнішній браузер)
+//   4. #tgWebAppInitData= (Telegram iOS у деяких версіях)
 
 const API = (() => {
-  let initData = "";
+  let cachedToken = "";
+  const JWT_KEY = "focus_jwt";
 
-  function getInitData() {
-    if (initData) return initData;
-    // 1) JS-об'єкт від Telegram WebApp SDK (найнадійніше)
+  function getAuthToken() {
+    if (cachedToken) return cachedToken;
+    // 1) JWT з localStorage — після bot-code входу в браузері
+    try {
+      const jwt = localStorage.getItem(JWT_KEY);
+      if (jwt && jwt.split(".").length === 3) {
+        cachedToken = jwt;
+        return cachedToken;
+      }
+    } catch (e) {}
+    // 2) JS-об'єкт від Telegram WebApp SDK (Mini App — основний канал)
     if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
-      initData = window.Telegram.WebApp.initData;
+      cachedToken = window.Telegram.WebApp.initData;
+      return cachedToken;
     }
-    // 2) Fallback: URL-параметр ?tgWebAppInitData=... (Telegram на деяких платформах
-    //    передає initData через URL, напр. webview на iPad, або зовнішній браузер)
-    if (!initData) {
+    // 3) URL-параметр ?tgWebAppInitData=... (Telegram на деяких платформах)
+    try {
       const qs = new URLSearchParams(window.location.search || "");
       const fromUrl = qs.get("tgWebAppInitData");
-      if (fromUrl) initData = fromUrl;
-    }
-    // 3) Fallback: хеш-фрагмент #tgWebAppInitData=... (Telegram iOS у деяких версіях)
-    if (!initData) {
-      const h = new URLSearchParams(window.location.hash ? window.location.hash.replace(/^#/, "") : "");
+      if (fromUrl) { cachedToken = fromUrl; return cachedToken; }
+    } catch (e) {}
+    // 4) Хеш-фрагмент #tgWebAppInitData=... (Telegram iOS у деяких версіях)
+    try {
+      const h = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
       const fromHash = h.get("tgWebAppInitData");
-      if (fromHash) initData = fromHash;
-    }
-    return initData || "";
+      if (fromHash) { cachedToken = fromHash; return cachedToken; }
+    } catch (e) {}
+    return "";
+  }
+
+  /** Зберегти JWT після успішного bot-code входу (викликає app.js). */
+  function setJwt(token) {
+    cachedToken = token || "";
+    try {
+      if (token) localStorage.setItem(JWT_KEY, token);
+      else localStorage.removeItem(JWT_KEY);
+    } catch (e) {}
+  }
+
+  /** Прибрати збережений JWT (коли бекенд відхилив його 401). */
+  function clearJwt() {
+    cachedToken = "";
+    try { localStorage.removeItem(JWT_KEY); } catch (e) {}
   }
 
   async function request(method, path, { json, body, params } = {}) {
@@ -33,7 +61,7 @@ const API = (() => {
 
     // Авторизація завжди через заголовок (надійніше за query-параметр —
     // initData довгий і може обрізатись проксі)
-    const id = getInitData();
+    const id = getAuthToken();
     if (id) headers["Authorization"] = "Bearer " + id;
 
     if (json !== undefined) {
@@ -58,6 +86,8 @@ const API = (() => {
       data = { ok: false, status: res.status };
     }
     if (!res.ok) {
+      // 401 — збережений токен більше невалідний, скидаємо
+      if (res.status === 401) clearJwt();
       const msg = (data && data.detail) || ("HTTP " + res.status);
       const err = new Error(msg);
       err.status = res.status;
@@ -149,7 +179,11 @@ const API = (() => {
     deletePromoCode: (code) =>
       request("DELETE", "/api/admin/promo-codes/" + encodeURIComponent(code)),
 
-    // для діагностики
-    getInitData,
+    // для діагностики та входу
+    getAuthToken,
+    setJwt,
+    clearJwt,
+    // зворотна сумісність (старі назви)
+    getInitData: getAuthToken,
   };
 })();

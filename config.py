@@ -109,10 +109,6 @@ class Settings:
     # Потрібен для верифікації audience ID-токена на бекенді.
     GOOGLE_OAUTH_CLIENT_ID: str = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
 
-    # Демо-режим: анонімний доступ до UI з браузера (для тестів/скріншотів).
-    # Вмикається для dev; ВИМКНУТИ (DEMO_MODE=false) перед публікацією в Play.
-    DEMO_MODE: bool = os.getenv("DEMO_MODE", "true").lower() == "true"
-
     def is_admin(self, tg_id: int = 0, email: str = "") -> bool:
         """Адмін за tg_id (Telegram) АБО за email (Google Sign-In)."""
         if tg_id and tg_id in self.ADMIN_IDS:

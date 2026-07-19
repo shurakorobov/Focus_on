@@ -199,26 +199,6 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ------------------------------ авторизація ---------------------------------
 
 
-def _demo_user() -> dict:
-    """Фіктивний користувач для демо-режиму (анонімний доступ з браузера).
-
-    Використовується тільки коли DEMO_MODE=true і запит прийшов без auth.
-    Дозволяє переглядати UI, тестити фічі, робити скріншоти.
-    tg_id=999999 — фіксований, premium=free (щоб показувати paywall).
-    """
-    return {
-        "id": 999999,
-        "tg_id": 999999,
-        "first_name": "Demo",
-        "last_name": "",
-        "username": "demo",
-        "photo_url": "",
-        "email": "",
-        "avatar_url": "",
-        "google_id": "",
-    }
-
-
 def _log_init_data_failure(init_data: str, request: Request) -> None:
     """Логує причину невдалої перевірки initData (для діагностики вебапп)."""
     try:
@@ -277,17 +257,8 @@ def current_user(request: Request) -> dict:
             user = authenticate(init_data)
             if not user:
                 # Невірний initData — логуємо причину для діагностики.
-                # У DEMO_MODE — fallback на demo user (вебапп може надсилати
-                # пошкоджений initData у деяких випадках).
                 _log_init_data_failure(init_data, request)
-                if settings.DEMO_MODE:
-                    user = _demo_user()
-                else:
-                    raise HTTPException(status_code=401, detail="invalid telegram auth")
-        elif settings.DEMO_MODE:
-            # Демо-режим: анонімний доступ (тест/скріншоти з браузера).
-            # Реальні користувачі завжди мають initData або JWT — сюди не доходять.
-            user = _demo_user()
+                raise HTTPException(status_code=401, detail="invalid telegram auth")
         else:
             raise HTTPException(status_code=401, detail="invalid telegram auth")
 
@@ -633,7 +604,7 @@ async def api_sounds(request: Request):
     is_prem = False
     try:
         user = current_user(request)
-        if user and user.get("id") != 999999:  # не demo
+        if user:
             is_prem = db.is_premium(user["id"])
     except Exception:
         pass

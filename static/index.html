@@ -16,7 +16,7 @@
   <meta name="theme-color" content="#f5f0fa" media="(prefers-color-scheme: light)" />
   <title>Focus ON</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260719b" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260719c" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -344,8 +344,28 @@
     </div>
   </div>
 
-  <script src="/static/api.js?v=20260719b"></script>
-  <script src="/static/cache.js?v=20260719b"></script>
-  <script src="/static/app.js?v=20260719b"></script>
+  <!-- ===== Екран входу (browser only — коли нема initData/JWT) ===== -->
+  <div class="auth-overlay hidden" id="auth-overlay">
+    <div class="auth-card">
+      <div class="auth-logo">🎯 Focus ON</div>
+      <p class="auth-sub">Увійдіть через Telegram-бота,<br>щоб синхронізувати прогрес</p>
+      <ol class="auth-steps">
+        <li>Натисніть кнопку нижче, щоб відкрити бота</li>
+        <li>Надішліть боту команду <code>/login</code></li>
+        <li>Скопіюйте 6-значний код сюди</li>
+      </ol>
+      <a class="auth-bot-btn" href="https://t.me/focuson_on_bot?start=login" target="_blank" rel="noopener">
+        🤖 Отримати код @focuson_on_bot
+      </a>
+      <input id="auth-code-input" class="auth-input" inputmode="numeric" maxlength="6" placeholder="• • • • • •" autocomplete="one-time-code">
+      <button id="auth-submit" class="primary-btn auth-submit" disabled>Увійти</button>
+      <div class="auth-error hidden" id="auth-error"></div>
+      <p class="auth-hint">Код діє 5 хвилин. Потрібен Telegram-акаунт.</p>
+    </div>
+  </div>
+
+  <script src="/static/api.js?v=20260719c"></script>
+  <script src="/static/cache.js?v=20260719c"></script>
+  <script src="/static/app.js?v=20260719c"></script>
 </body>
 </html>
