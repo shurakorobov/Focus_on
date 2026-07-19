@@ -697,9 +697,17 @@
       refreshFocusMeta();
     } catch (e) {
       if (e && e.status === 401) {
-        // Немає авторизації (звичайний браузер без initData/JWT) — показуємо
-        // екран входу через bot-code замість тексту про помилку.
-        showAuthOverlay();
+        // У вебапп (Telegram) це не мало б траплятись — initData має бути валідним.
+        // Показуємо зрозумілий текст + кнопку перезавантажити.
+        // У звичайному браузері — показуємо екран bot-code входу.
+        const isTelegramWebApp = !!(tg && (tg.initData || tg.platform));
+        if (isTelegramWebApp) {
+          $("#profile-head").innerHTML =
+            '<div class="hint-inline">Не вдалось завантажити профіль. ' +
+            '<a href="#" onclick="location.reload();return false;">Перезавантажити</a></div>';
+        } else {
+          showAuthOverlay();
+        }
         return;
       }
       $("#profile-head").innerHTML = '<div class="hint-inline">Не вдалося завантажити профіль</div>';
@@ -3189,9 +3197,11 @@
       telegram_version: (tg && tg.version) || "unknown",
       has_start_param: Boolean(state.launchStartParam),
     });
-    // Якщо немає авторизації (звичайний браузер) — показуємо екран входу,
-    // інакше намагаємося завантажити профіль (що також може вивести на вхід).
-    if (!API.getAuthToken()) {
+    // Якщо Telegram WebApp присутній — це вебапп, не питати bot-code
+    // (користувач вже ідентифікований через initData).
+    // Якщо ні — це звичайний браузер, показуємо екран входу.
+    const isTelegramWebApp = !!(tg && (tg.initData || tg.platform));
+    if (!API.getAuthToken() && !isTelegramWebApp) {
       showAuthOverlay();
     } else {
       await loadProfile();
