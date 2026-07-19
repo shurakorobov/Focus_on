@@ -161,10 +161,16 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  /* 100dvh — для Android WebView / Telegram iOS (100vh іноді не враховує keyboard/zoom).
+     fallback 100vh якщо dvh не підтримується. */
+  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   padding-top: env(safe-area-inset-top);
   max-width: 480px;
   margin: 0 auto;
   width: 100%;
+  box-sizing: border-box;
 }
 /* Планшети: розширюємо до 720px щоб не було порожніх країв */
 @media (min-width: 600px) {
