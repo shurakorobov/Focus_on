@@ -452,6 +452,7 @@ async def debug_initdata(request: Request):
         "host": request.headers.get("host", ""),
         "origin": request.headers.get("origin", ""),
         "referer": request.headers.get("referer", "")[:120],
+        "timestamp": int(time.time()),
     }
     if init_data:
         try:
@@ -482,7 +483,22 @@ async def debug_initdata(request: Request):
                 info["computed_hash_prefix"] = computed[:16]
         except Exception as e:
             info["parse_error"] = str(e)
+    # Зберегти в БД для наступного перегляду
+    try:
+        db.save_debug_initdata(info)
+    except Exception:
+        pass
     return info
+
+
+@app.get("/api/debug/initdata/last")
+async def debug_initdata_last():
+    """Повертає останній запис діагностики initData."""
+    try:
+        rows = db.get_debug_initdata_last(limit=5)
+        return {"entries": rows}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 class TelegramLoginReq(BaseModel):

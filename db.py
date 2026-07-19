@@ -317,6 +317,13 @@ def migrate() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_login_codes_code ON login_codes(code);
 
+            -- Діагностичні логи initData (тимчасово — для відладки входу)
+            CREATE TABLE IF NOT EXISTS debug_initdata (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                info_json   TEXT NOT NULL DEFAULT '{}',
+                created_at  TEXT NOT NULL
+            );
+
             -- Статистика прослуховувань треків
             CREATE TABLE IF NOT EXISTS plays (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1353,6 +1360,36 @@ def save_bug_report(
             ),
         )
         return _last_id(conn, cur, "bug_reports")
+
+
+# ------------------------------ діагностика initData ------------------------
+
+
+def save_debug_initdata(info: dict) -> int:
+    """Зберігає діагностичний запис про initData (тимчасово)."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO debug_initdata (info_json, created_at) VALUES (?, ?)""",
+            (json.dumps(info, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
+        )
+        return _last_id(conn, cur, "debug_initdata")
+
+
+def get_debug_initdata_last(limit: int = 5) -> list:
+    """Повертає останні N діагностичних записів."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT info_json, created_at FROM debug_initdata ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                d = json.loads(r["info_json"]) if "info_json" in r.keys() else json.loads(r[0])
+            except Exception:
+                d = {}
+            out.append({"created_at": r["created_at"] if "created_at" in r.keys() else r[1], **d})
+        return out
 
 
 # ------------------------------ платежі -------------------------------------
