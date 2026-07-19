@@ -239,8 +239,20 @@ def current_user(request: Request) -> dict:
         token = auth[7:].strip()
 
     user = None
-    # спершу пробуємо JWT (формат: три частини через крапку)
-    if token and token.count(".") == 2:
+    # Розрізняємо JWT від Telegram initData:
+    # - JWT має вигляд header.payload.signature, кожна частина — base64url,
+    #   header завжди починається з 'eyJ' (base64('{')).
+    # - initData — це query-string типу 'query_id=...&user=...&hash=...'
+    #   і може містити крапки (напр. в signature), тому перевірка count('.')==2
+    #   недостатня — можна випадково сприйняти initData за JWT.
+    is_jwt = (
+        token
+        and token.count(".") == 2
+        and token.startswith("eyJ")
+        and "query_id=" not in token
+        and "hash=" not in token
+    )
+    if is_jwt:
         user = verify_token(token)
         if not user:
             raise HTTPException(status_code=401, detail="invalid jwt")
@@ -283,7 +295,14 @@ def _authenticate_token(token: str) -> dict | None:
     приймає і JWT (з крапками), і initData. Повертає user-словник або None."""
     if not token:
         return None
-    if token.count(".") == 2:
+    # Розрізняння JWT від initData — див. коментар у current_user().
+    is_jwt = (
+        token.count(".") == 2
+        and token.startswith("eyJ")
+        and "query_id=" not in token
+        and "hash=" not in token
+    )
+    if is_jwt:
         u = verify_token(token)
     else:
         u = authenticate(token)
