@@ -20,18 +20,23 @@ const API = (() => {
         return cachedToken;
       }
     } catch (e) {}
-    // 2) JS-об'єкт від Telegram WebApp SDK (Mini App — основний канал)
+    // 2) window.__JWT — Android APK ін'єктує JWT через WebView (MainActivity.kt)
+    if (window.__JWT && String(window.__JWT).split(".").length === 3) {
+      cachedToken = window.__JWT;
+      return cachedToken;
+    }
+    // 3) JS-об'єкт від Telegram WebApp SDK (Mini App — основний канал)
     if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
       cachedToken = window.Telegram.WebApp.initData;
       return cachedToken;
     }
-    // 3) URL-параметр ?tgWebAppInitData=... (Telegram на деяких платформах)
+    // 4) URL-параметр ?tgWebAppInitData=... (Telegram на деяких платформах)
     try {
       const qs = new URLSearchParams(window.location.search || "");
       const fromUrl = qs.get("tgWebAppInitData");
       if (fromUrl) { cachedToken = fromUrl; return cachedToken; }
     } catch (e) {}
-    // 4) Хеш-фрагмент #tgWebAppInitData=... (Telegram iOS у деяких версіях)
+    // 5) Хеш-фрагмент #tgWebAppInitData=... (Telegram iOS у деяких версіях)
     try {
       const h = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
       const fromHash = h.get("tgWebAppInitData");

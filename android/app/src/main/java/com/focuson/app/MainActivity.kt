@@ -237,6 +237,30 @@ class MainActivity : ComponentActivity() {
                     settings.loadWithOverviewMode = true
                     webChromeClient = WebChromeClient()
                     webViewClient = object : WebViewClient() {
+                        // Перехоплюємо зовнішні посилання (t.me/, tg:, tel:, mailto:, http://інший_домен)
+                        // і відкриваємо їх у зовнішньому застосунку (Telegram/браузер), а не у WebView.
+                        // Це запобігає помилці net::ERR_UNKNOWN_URL_SCHEME для tg: посилань.
+                        override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                            val url = request?.url ?: return false
+                            val scheme = url.scheme?.lowercase() ?: ""
+                            val host = url.host ?: ""
+                            // Наш застосунок — завжди відкриваємо у WebView
+                            if (host == "focus-on.onrender.com" || scheme == "https" && (host.endsWith(".onrender.com"))) {
+                                return false
+                            }
+                            // t.me → відкриваємо через Telegram (start Activity)
+                            if (scheme == "http" || scheme == "https" || scheme == "tg" || scheme == "tel" || scheme == "mailto") {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, url)
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    startActivity(intent)
+                                    return true
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Не вдалось відкрити зовнішнє посилання: $url", e)
+                                }
+                            }
+                            return true
+                        }
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
                             // Ін'єкція JWT: window.__JWT + перехоплення fetch/XHR
