@@ -305,6 +305,19 @@
     const v = (tg && tg.version) || "?";
     return `${platform} · TG ${v} · ${ua.slice(0, 60)}`;
   }
+  // Діагностика авторизації: надсилає на бекенд що бачить клієнт.
+  // Допомагає зрозуміти чому initData не валідний.
+  async function sendAuthDiagnostic() {
+    try {
+      const initData = API.getAuthToken();
+      // тестуємо debug endpoint — він сам візьме токен з заголовка
+      await fetch("/api/debug/initdata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ init_data: initData }),
+      });
+    } catch (e) {}
+  }
   function fmtDate(iso) {
     if (!iso) return "";
     try {
@@ -3183,6 +3196,8 @@
     } else {
       await loadProfile();
     }
+    // Діагностика: запишемо на бекенд що бачить клієнт (тимчасово).
+    sendAuthDiagnostic();
     // Перевіряємо premium-тему після завантаження профілю (можливо fallback на dark)
     initThemeGuard();
     // передзавантажуємо список треків, щоб pickDefaultTrack мав дані
