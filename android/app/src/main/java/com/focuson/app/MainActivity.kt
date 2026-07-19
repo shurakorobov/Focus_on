@@ -232,10 +232,19 @@ class MainActivity : ComponentActivity() {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = false
+                    // Діагностика: дозволити console.log у logcat
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                        WebView.setWebContentsDebuggingEnabled(true)
+                    }
                     // Адаптивність: widest viewport без обмеження ширини
                     settings.useWideViewPort = true
                     settings.loadWithOverviewMode = true
-                    webChromeClient = WebChromeClient()
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
+                            Log.d("FocusON_WEB", message.message() + " (" + message.sourceId() + ":" + message.lineNumber() + ")")
+                            return true
+                        }
+                    }
                     webViewClient = object : WebViewClient() {
                         // Перехоплюємо зовнішні посилання (t.me/, tg:, tel:, mailto:, http://інший_домен)
                         // і відкриваємо їх у зовнішньому застосунку (Telegram/браузер), а не у WebView.

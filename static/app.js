@@ -3208,6 +3208,25 @@
     }
     // Діагностика: запишемо на бекенд що бачить клієнт (тимчасово).
     sendAuthDiagnostic();
+    // Діагностика layout: виводимо позиції критичних елементів у console (для logcat)
+    setTimeout(() => {
+      try {
+        const checks = [".large-title-bar", ".tabbar", ".screen.active", "body"];
+        const out = {};
+        checks.forEach(sel => {
+          const el = document.querySelector(sel);
+          if (el) {
+            const r = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            out[sel] = {pos: cs.position, top: Math.round(r.top), bot: Math.round(r.bottom), h: Math.round(r.height)};
+          }
+        });
+        out.vw = window.innerWidth;
+        out.vh = window.innerHeight;
+        out.dh = document.documentElement.clientHeight;
+        console.log("LAYOUT_DBG " + JSON.stringify(out));
+      } catch (e) {}
+    }, 1500);
     // Перевіряємо premium-тему після завантаження профілю (можливо fallback на dark)
     initThemeGuard();
     // передзавантажуємо список треків, щоб pickDefaultTrack мав дані
