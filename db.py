@@ -1705,13 +1705,14 @@ def get_admin_stats() -> dict:
             (week_ago,),
         ).fetchall()
 
-        # топ користувачі
+        # топ користувачі — тільки ті хто має завершені сесії (total_focus_seconds > 0)
         top_users = conn.execute(
             """
             SELECT u.tg_id, u.first_name, u.username,
                    u.total_focus_seconds, COUNT(s.id) AS sessions, u.plan
             FROM users u
             LEFT JOIN sessions s ON s.tg_id = u.tg_id AND s.completed = 1
+            WHERE u.total_focus_seconds > 0
             GROUP BY u.tg_id
             ORDER BY u.total_focus_seconds DESC
             LIMIT 10

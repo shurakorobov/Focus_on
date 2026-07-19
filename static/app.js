@@ -3037,8 +3037,9 @@
     async function loadUrls() {
       if (_urlsLoaded) return;
       try {
-        const r = await fetch("/api/sounds");
-        const d = await r.json();
+        // Використовуємо API.sounds() (з Authorization заголовком) замість fetch
+        // щоб бекенд знав що юзер premium і віддав URL для premium-звуків.
+        const d = await API.sounds();
         (d.sounds || []).forEach((s) => {
           const ch = SOUND_CHANNELS.find((c) => c.id === s.id);
           if (ch) {

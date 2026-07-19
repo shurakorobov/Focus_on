@@ -107,6 +107,7 @@ const API = (() => {
     me: () => request("GET", "/api/me"),
     modes: () => request("GET", "/api/modes"),
     categories: () => request("GET", "/api/categories"),
+    sounds: () => request("GET", "/api/sounds"),
     stats: () => request("GET", "/api/stats"),
     statsToday: () => request("GET", "/api/stats/today"),
     setDailyGoal: (seconds) =>
